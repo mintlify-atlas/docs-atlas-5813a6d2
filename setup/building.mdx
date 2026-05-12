@@ -1,0 +1,62 @@
+---
+title: "Build Petari from source and verify the binary output"
+description: "Clone the repository, extract your game disc with Dolphin Emulator, run the configure script, and compile Petari with Ninja in four steps."
+---
+
+Building Petari produces an output binary that is byte-for-byte identical to the original `sys/main.dol` from your game disc. You will need an existing copy of Super Mario Galaxy 1 (Korean version) and the dependencies installed from the [previous page](/setup/dependencies). The process takes about four steps from a clean checkout to a successful build.
+
+<Warning>
+  Do **not** use any AI software to assist with decompilation. The project aims to be a clean, human-authored reconstruction of the original source code. AI tools have known legal concerns around training data sourced from SDK leaks and similar material.
+</Warning>
+
+<Steps>
+  <Step title="Clone the repository">
+    Clone Petari from GitHub:
+
+    ```bash
+    git clone https://github.com/SMGCommunity/Petari.git
+    ```
+
+    Then change into the project directory:
+
+    ```bash
+    cd Petari
+    ```
+  </Step>
+  <Step title="Extract the game disc">
+    Open [Dolphin Emulator](https://dolphin-emu.org/), right-click your Super Mario Galaxy 1 disc image, and choose **Extract Entire Disc**. Extract the contents into the `orig/RMGK01` folder inside your Petari checkout.
+
+    <Note>
+      Only `sys/main.dol` is required from the extracted disc. All other extracted files can be deleted to save disk space.
+    </Note>
+  </Step>
+  <Step title="Run the configure script">
+    Generate the Ninja build files by running:
+
+    ```bash
+    python configure.py
+    ```
+
+    By default this targets version `RMGK01` (Rev 0, Korea). To build `RMGK02` (Rev 1, Korea) instead, pass the `--version` flag:
+
+    ```bash
+    python configure.py --version RMGK02
+    ```
+
+    Supported versions:
+
+    | Version ID | Description   |
+    |------------|---------------|
+    | `RMGK01`   | Rev 0 (Korea) |
+    | `RMGK02`   | Rev 1 (Korea) |
+  </Step>
+  <Step title="Build with Ninja">
+    Run Ninja to compile the project:
+
+    ```bash
+    ninja
+    ```
+
+    A successful build verifies that the compiled output matches the original binary. Once complete, an `objdiff.json` file is created in the project root, which is used for function-level diffing in the next step.
+  </Step>
+</Steps>

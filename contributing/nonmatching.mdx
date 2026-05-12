@@ -1,0 +1,59 @@
+---
+title: "Documenting nonmatching code in Petari"
+description: "How to handle, comment, and submit C++ code that does not yet produce a byte-for-byte binary match with the original Super Mario Galaxy 1 executable."
+---
+
+Nonmatching code is a C++ implementation that compiles correctly and is functionally equivalent to the original, but whose compiled output does not yet match the original binary byte-for-byte. This happens when the exact compiler behavior — register allocation, instruction scheduling, inlining decisions — cannot yet be fully reproduced. Nonmatching contributions are accepted in Petari, but they must be clearly marked so that other contributors know the function still needs work.
+
+## Marking code as nonmatching
+
+If your implementation does not produce a 1:1 match, you must do two things in a comment directly above the function:
+
+1. Explain **why** it does not match
+2. Include a **decomp.me scratch link** so others can pick up where you left off
+
+```cpp
+// NONMATCHING: Register allocation differs in the loop body — r4 and r5 are
+// swapped compared to the original. Likely caused by a different inlining
+// decision in the callee. Scratch: https://decomp.me/scratch/xxxxxxxxxx
+bool LiveActor::receiveMessage(u32 msg, HitSensor* pSender, HitSensor* pReceiver) {
+    if (mSensorKeeper == nullptr) {
+        return false;
+    }
+    return mSensorKeeper->receiveMessage(msg, pSender, pReceiver);
+}
+```
+
+Both pieces of information are required. A nonmatching comment without a decomp.me link, or a decomp.me link without an explanation, is not sufficient.
+
+## The int vs s32 type issue
+
+One common cause of nonmatching is using `s32` where the original symbol uses `int`. Although both types represent a 32-bit signed integer, **they mangle to different symbols** in CodeWarrior. If the symbol table shows `int` in the function signature, you must use `int` — not `s32`.
+
+```cpp
+// Incorrect — produces a different mangled symbol if the original uses int
+void initHitSensor(s32 count);
+
+// Correct — matches the original symbol mangling
+void initHitSensor(int count);
+```
+
+Check the symbol map entry for the function before deciding which type to use. The same applies to other type aliases: always defer to what appears in the symbol rather than a seemingly equivalent typedef.
+
+<Tip>
+  If you have IDA Pro, use the Hex-Rays decompiler output as a starting point for difficult functions. It will not produce matching code directly, but it gives you a readable approximation of the control flow, data structures, and types that you can then refine against the assembly. The Hex-Rays output often reveals the correct argument types, which helps avoid the `int` vs `s32` problem.
+</Tip>
+
+<Note>
+  Nonmatching code is accepted as long as it is clearly marked with a comment explaining the mismatch and a decomp.me scratch link. A well-documented nonmatch is far more useful to the project than no implementation at all — it gives future contributors a starting point and records what has already been tried.
+</Note>
+
+## Submitting nonmatching code
+
+Before opening a pull request with nonmatching code:
+
+- Confirm the function is functionally correct (same behavior as the original)
+- Add the nonmatching comment with the reason and decomp.me link
+- Follow all other [code style guidelines](/contributing/guidelines)
+
+Do not submit code that is both nonmatching and undocumented. If you are unsure why your code does not match, share your decomp.me scratch in the [Discord server](https://discord.gg/ZxEqyYeZbf) and ask for help before submitting.

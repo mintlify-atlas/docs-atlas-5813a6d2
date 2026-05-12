@@ -1,0 +1,148 @@
+---
+title: "symbols.txt: defining symbols and addresses"
+description: "symbols.txt maps every symbol name to its section and address, with optional attributes that control type, size, scope, and linker behavior."
+---
+
+`symbols.txt` provides decomp-toolkit with a complete inventory of every symbol in a module. Each line associates a name — which for C++ code is the mangled identifier — with its section, address, and optional metadata. This metadata drives disassembly formatting, object generation, and linker script production. The file is updated automatically when decomp-toolkit analyzes the binary, but individual entries can be hand-edited or annotated to guide the tooling.
+
+## Format
+
+```
+symbol_name = section:address; // [attributes]
+```
+
+- **`symbol_name`** — The symbol's identifier. For C++ symbols this is the mangled name (for example, `__dt__13mDoExt_bckAnmFv` is the destructor of `mDoExt_bckAnm`).
+- **`section`** — The ELF section the symbol lives in (for example, `.text`, `.data`, `.bss`).
+- **`address`** — The symbol's address. For DOL splits this is an absolute address; for REL splits it is section-relative. Numbers may be decimal or hexadecimal; **hexadecimal values must be prefixed with `0x`**.
+
+Comment lines beginning with `//` or `#` are permitted but are **not** preserved when decomp-toolkit rewrites the file.
+
+## Examples from Petari
+
+```
+__start = .init:0x8000403C; // type:function size:0x16C scope:weak
+__init_hardware = .init:0x800042E0; // type:function size:0x24 scope:global
+_rom_copy_info = .init:0x80006420; // type:object size:0x84 scope:global data:4byte
+gTRKInterruptVectorTable = .init:0x800044C0; // type:label scope:global
+@etb_800064E0 = extab:0x800064E0; // type:object size:0x8 scope:local hidden
+__dt__13mDoExt_bckAnmFv = .text:0x800DD2EC; // type:function size:0x5C scope:global align:4
+```
+
+## Attributes
+
+All attributes are optional and space-separated inside the `// …` comment.
+
+<AccordionGroup>
+  <Accordion title="type:">
+    The kind of symbol. Affects how decomp-toolkit generates disassembly and object files.
+
+    | Value | Meaning |
+    |-------|---------|
+    | `function` | Executable code. Disassembled as PowerPC instructions. |
+    | `object` | Data. Disassembled according to the `data:` attribute. |
+    | `label` | An address marker with no associated size. |
+
+    ```
+    __start = .init:0x8000403C; // type:function size:0x16C scope:weak
+    gTRKInterruptVectorTable = .init:0x800044C0; // type:label scope:global
+    _rom_copy_info = .init:0x80006420; // type:object size:0x84 scope:global data:4byte
+    ```
+  </Accordion>
+
+  <Accordion title="size:">
+    The size of the symbol in bytes. Required for `object` symbols to produce correct disassembly. Accepts decimal or `0x`-prefixed hexadecimal.
+
+    ```
+    __fill_mem = .init:0x80004388; // type:function size:0xB4 scope:global
+    ```
+  </Accordion>
+
+  <Accordion title="scope:">
+    The symbol's visibility in the generated object file.
+
+    | Value | Meaning |
+    |-------|---------|
+    | `global` | Exported; visible to the linker from other objects. This is the default. |
+    | `local` | File-scoped; not exported. Corresponds to `static` in C/C++. |
+    | `weak` | Exported but may be overridden by a strong definition elsewhere. |
+
+    ```
+    __set_debug_bba = .init:0x80004028; // type:function size:0xC scope:local
+    __start = .init:0x8000403C; // type:function size:0x16C scope:weak
+    __init_hardware = .init:0x800042E0; // type:function size:0x24 scope:global
+    ```
+  </Accordion>
+
+  <Accordion title="align:">
+    The alignment of the symbol in bytes. When specified, decomp-toolkit uses this value instead of inferring alignment from the surrounding data.
+
+    ```
+    __dt__13mDoExt_bckAnmFv = .text:0x800DD2EC; // type:function size:0x5C scope:global align:4
+    ```
+  </Accordion>
+
+  <Accordion title="data:">
+    Controls how an `object` symbol's bytes are formatted in the disassembly output. Only meaningful when `type:object` is also set.
+
+    | Value | Description |
+    |-------|-------------|
+    | `byte` | 8-bit unsigned integers |
+    | `2byte` | 16-bit unsigned integers |
+    | `4byte` | 32-bit unsigned integers |
+    | `8byte` | 64-bit unsigned integers |
+    | `float` | 32-bit IEEE 754 floats |
+    | `double` | 64-bit IEEE 754 doubles |
+    | `int` | Signed 32-bit integers |
+    | `short` | Signed 16-bit integers |
+    | `string` | Null-terminated ASCII string |
+    | `wstring` | Null-terminated wide (UTF-16) string |
+    | `string_table` | Array of null-terminated ASCII strings |
+    | `wstring_table` | Array of null-terminated wide strings |
+
+    ```
+    _rom_copy_info = .init:0x80006420; // type:object size:0x84 scope:global data:4byte
+    ```
+  </Accordion>
+
+  <Accordion title="hidden">
+    Marks the symbol as hidden in the generated ELF object. This is currently used only for `extab` symbols related to C++ exception handling.
+
+    ```
+    @etb_800064E0 = extab:0x800064E0; // type:object size:0x8 scope:local hidden
+    ```
+  </Accordion>
+
+  <Accordion title="force_active">
+    Marks the symbol as "exported" in the generated object and adds it to `FORCEACTIVE` in the generated `ldscript.lcf`. This prevents the linker from dead-stripping the symbol even if it appears unreferenced.
+
+    See [Comment section](/configuration/comment-section) for how the export flag interacts with `.comment` section generation.
+
+    ```
+    SomeInitFunction__Fv = .text:0x80001000; // type:function size:0x10 force_active
+    ```
+  </Accordion>
+
+  <Accordion title="noreloc">
+    Prevents the contents of the symbol from being interpreted as addresses during relocation analysis. Use this for data objects whose byte patterns happen to look like pointers but are not.
+
+    ```
+    sSomeLookupTable = .data:0x80563420; // type:object size:0x40 noreloc
+    ```
+  </Accordion>
+
+  <Accordion title="noexport">
+    When the `export_all` option is enabled in the project configuration, this flag excludes the symbol from being exported. Use it for symbols that are affected by the linker's `-code_merging` optimization and should not be forced active.
+
+    ```
+    sMergedFunction__Fv = .text:0x80002000; // type:function size:0x8 noexport
+    ```
+  </Accordion>
+
+  <Accordion title="stripped">
+    Indicates that this symbol was removed by the linker from the final binary. Stripped symbols are still recorded because they can influence the [common BSS inflation bug](/configuration/common-bss#inflation-bug) even though they do not appear in the output.
+
+    ```
+    sStrippedGlobal = .bss:0x8060A000; // type:object size:0x4 stripped
+    ```
+  </Accordion>
+</AccordionGroup>

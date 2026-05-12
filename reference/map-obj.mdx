@@ -1,0 +1,307 @@
+---
+title: "MapObj: placed interactive world objects"
+description: "The MapObj system and its MapObjActor base class, covering every interactive and decorative object placed in the Super Mario Galaxy 1 game world."
+---
+
+`MapObj` is the catch-all system for placed world objects in Super Mario Galaxy 1. Almost every non-enemy, non-player, non-area object in a level — from coins and power stars to lava geysers and observatory machinery — is a `MapObjActor` or a class that inherits from it. The `MapObj/` directory contains over 310 header files, making it the largest subsystem in the codebase.
+
+## MapObjActor — the base class
+
+`MapObjActor` inherits `LiveActor` and adds standardized support for rail movement, rotation, breakable models, switch reactions (`SwitchA` / `SwitchB`), LOD control, and a three-nerve state machine (`Wait` → `Move` → `Done`).
+
+```cpp
+class MapObjActor : public LiveActor {
+public:
+    MapObjActor(const char*);
+    MapObjActor(const char*, const char*);  // alternate ctor with model name override
+
+    virtual void init(const JMapInfoIter&);
+    virtual void initAfterPlacement();
+    virtual void appear();
+    virtual void kill();
+    virtual void control();
+    virtual void calcAndSetBaseMtx();
+
+    // Scene-connection and switch setup
+    virtual void connectToScene(const MapObjActorInitInfo&);
+    virtual void initCaseUseSwitchA(const MapObjActorInitInfo&);
+    virtual void initCaseNoUseSwitchA(const MapObjActorInitInfo&);
+    virtual void initCaseUseSwitchB(const MapObjActorInitInfo&);
+    virtual void initCaseNoUseSwitchB(const MapObjActorInitInfo&);
+
+    // Helpers
+    bool isObjectName(const char*) const;
+    bool tryCreateBreakModel(const MapObjActorInitInfo&);
+    void startMapPartsFunctions();
+    void endMapPartsFunctions();
+    void pauseMapPartsFunctions();
+
+    // State execute methods
+    void exeWait();
+    void exeMove();
+    void exeDone();
+
+    const char* mObjectName;                    // 0x8C
+    LodCtrl* mPlanetLodCtrl;                    // 0x90
+    ModelObj* mBloomModel;                      // 0x94
+    ModelObj* mModelObj;                        // 0x98
+    ProjmapEffectMtxSetter* mMatrixSetter;      // 0x9C
+    MapPartsRailMover* mRailMover;              // 0xA0
+    MapPartsRotator* mRotator;                  // 0xA4
+    MapPartsRailRotator* mRailRotator;          // 0xA8
+    MapPartsRailPosture* mRailPosture;          // 0xAC
+    MapPartsRailGuideDrawer* mRailGuideDrawer;  // 0xB0
+    Nerve* mWaitNrv;  // 0xB8
+    Nerve* mMoveNrv;  // 0xBC
+    Nerve* mDoneNrv;  // 0xC0
+};
+```
+
+## MapObjActorInitInfo — initialization descriptor
+
+`MapObjActorInitInfo` is a plain data struct that sub-classes fill before calling `MapObjActor::initialize()`. It switches on/off subsystems like the binder, shadow, sensors, rail mover, and rotator without requiring virtual overrides for every combination.
+
+```cpp
+class MapObjActorInitInfo {
+public:
+    MapObjActorInitInfo();
+
+    void setupHioNode(const char*);
+    void setupModelName(const char*);
+    void setupConnectToScene();
+    void setupBinder(f32, f32);
+    void setupEffect(const char*);
+    void setupHitSensor();
+    void setupShadow(const char*);
+    void setupRailMover();
+    void setupRotator();
+    void setupRailRotator();
+    void setupRailPosture();
+    void setupNerve(const Nerve*);
+    void setupGroupClipping(s32);
+    void setupClippingRadius(f32);
+
+    bool mSetDefaultPosition;  // 0x0
+    bool mConnectToScene;      // 0x1
+    bool mInitBinder;          // 0x2
+    bool mHasEffect;           // 0x3
+    bool mHasSensors;          // 0x4
+    bool mHasShadows;          // 0x5
+    bool mCalcGravity;         // 0x6
+    bool mProjectMapMtx;       // 0x7
+    bool mHasRailMover;        // 0x9
+    bool mHasRotator;          // 0xA
+    bool mHasRailRotator;      // 0xB
+    bool mUsesRailPosture;     // 0xE
+    bool mNoUseLOD;            // 0x8D
+
+    const char* mModelName;    // 0x14
+    f32 mSensorSize;           // 0x20
+    TVec3f mSensorOffset;      // 0x24
+    f32 mBinderRadius;         // 0x34
+    f32 mBinderCenterY;        // 0x38
+    const char* mEffectName;   // 0x3C
+    const Nerve* mNerve;       // 0x4C
+    f32 mClippingRadius;       // 0x54
+    const char* mShadowName;   // 0x78
+    f32 mShadowLength;         // 0x7C
+};
+```
+
+## Object categories
+
+<AccordionGroup>
+  <Accordion title="Collectibles">
+    Items the player picks up to gain points, health, or progress.
+
+    | Class | Object | Notes |
+    |---|---|---|
+    | `Coin` | Coin | Full state machine: fix, move, hop, spin-drain; tracks `mIsPurpleCoin` |
+    | `BlueChip` | Blue chip | Counted variant of coin |
+    | `YellowChip` | Yellow chip | Counted variant |
+    | `StarPiece` | Star bit | Physics projectile attracted by star pointer |
+    | `PowerStar` | Power star | Complex appear demo and `mIsGrandStar` flag |
+    | `Note` | Music note | Path-following collectible |
+    | `MorphItemObjNeo` | Transformation item | Activates bee/ice/fire modes |
+    | `BenefitItemInvincible` | Invincibility star | Timed power-up |
+    | `BenefitItemLifeUp` | 1-Up mushroom | Extra life collectible |
+    | `CoinBox` | Coin box | Spawns coins when struck |
+    | `ItemBlock` | ? Block | Spawns item on first hit |
+  </Accordion>
+
+  <Accordion title="Switches">
+    Pressure plates and interactive switches that trigger other objects via the switch system.
+
+    | Class | Object | Notes |
+    |---|---|---|
+    | `CrystalSwitch` | Crystal switch | Spin-attack activated; rotates on impact |
+    | `HipDropSwitch` | Ground-pound switch | Requires hip-drop to activate |
+    | `HipDropTimerSwitch` | Timed ground-pound switch | Auto-deactivates |
+    | `KeySwitch` | Key switch | Requires a key item |
+    | `ScrewSwitch` | Screw switch | Rotated by spin attack |
+    | `ScrewSwitchReverse` | Reverse screw switch | Opposite rotation direction |
+    | `PicketSwitch` | Picket switch | Step-on activated |
+    | `SpinLeverSwitch` | Spin lever | Pull by spinning |
+    | `ValveSwitch` | Valve | Turn to open |
+    | `ArrowSwitch` | Arrow switch | Directional tile switch |
+    | `PTimerSwitch` | P-switch | Classic Mario timed switch |
+    | `HitWallTimerSwitch` | Wall-hit timer switch | Activates on collision |
+    | `SwitchBox` | Switch box | Destroyable to activate |
+    | `DesertLandMoveSwitch` | Sand land switch | Moves terrain segment |
+    | `SnowplowSwitch` | Snowplow switch | Pushes snow |
+  </Accordion>
+
+  <Accordion title="Platforms and moving objects">
+    Surfaces the player can stand on, with optional movement along a rail.
+
+    | Class | Object | Notes |
+    |---|---|---|
+    | `IceStep` | Ice platform | Slippery surface; also used as a footing on Mario's ice floor |
+    | `AssemblyBlock` | Assembly block | Snaps together via switch |
+    | `FallDownBridge` | Collapsing bridge | Falls after delay when stood on |
+    | `RailMoveObj` | Generic rail mover | `MapObjActor` subclass for rail-following platforms |
+    | `RotateMoveObj` | Rotating platform | `MapObjActor` subclass for rotating objects |
+    | `HipDropMoveObj` | Hip-drop platform | Drops on ground-pound |
+    | `RevolvingWay` | Revolving walkway | Rotates continuously |
+    | `CollapsePlane` | Collapse plane | Crumbles under sustained weight |
+    | `RailBlock` | Rail block | Slides along rail between stops |
+    | `TimerMoveWall` | Timer-wall | Moves on timed schedule |
+    | `WatchTowerRotateStep` | Tower staircase | Rotates around vertical axis |
+    | `BattleShipElevator` | Battleship elevator | Vertical lift |
+    | `LargeChain` | Chain | Animated decorative chain with physics |
+  </Accordion>
+
+  <Accordion title="Hazards">
+    Environmental objects that damage or kill the player on contact.
+
+    ```cpp
+    class BlackHole : public LiveActor {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual void attackSensor(HitSensor*, HitSensor*);
+
+        bool isInCubeBox(const TVec3f&) const;
+        void exeWait();
+        void exeDemo();
+        void exeDisappear();
+
+        ModelObj* mBlackHoleModel;     // 0x8C
+        ActorCameraInfo* mCameraInfo;  // 0x108
+    };
+    ```
+
+    | Class | Object | Notes |
+    |---|---|---|
+    | `BlackHole` | Black hole | Pulls Mario in; `isInCubeBox` for cubic variant |
+    | `FireBar` | Fire bar | Rotating fire chain (`FireBubble` chain) |
+    | `LavaGeyser` | Lava geyser | Periodic lava burst |
+    | `SpaceMine` | Spiked mine | Floats on path; contact hazard |
+    | `Jiraira` | Spiked ground mine | Proximity-triggered explosion (also in Enemy) |
+    | `ElectricBall` | Electric ball | Rolling electric sphere |
+    | `ElectricRail` | Electric rail | Rail with periodic pulse |
+    | `LavaBreakColumn` | Lava column | Breaks after timed interval |
+    | `LavaProminence` | Lava prominence | Eruption of lava arc |
+    | `LavaFloater` | Lava floater | Rocks floating on lava |
+    | `NeedlePlant` | Needle plant | Spike-hazard foliage |
+    | `SandstormBase` | Sandstorm | Wind-push hazard |
+    | `Dossun` | Thwomp (also Enemy) | Ceiling-drop hazard |
+  </Accordion>
+
+  <Accordion title="Water and fluid objects">
+    Objects related to water physics, fountains, and the ocean system.
+
+    | Class | Object | Notes |
+    |---|---|---|
+    | `Fountain` | Fountain | Vertical water spout |
+    | `FountainBig` | Large fountain | Larger variant with extra splash |
+    | `OceanWaveFloater` | Ocean wave floater | Follows wave height |
+    | `LotusLeaf` | Lily pad | Floats on water surface |
+    | `WaterLeakPipe` | Leaky pipe | Sprays directional water stream |
+    | `WaterPressure` | Water pressure cannon | Shoots `WaterPressureBullet` |
+    | `SpringJetWater` | Spring jet | Underwater upward jet |
+    | `SpringWaterFloaterSpot` | Water hover spot | Lifts Mario if in beam |
+    | `WhirlPool` | Whirlpool | Spinning current area |
+    | `AirBubble` | Air bubble | Replenishes water breath meter |
+    | `AirBubbleGenerator` | Bubble generator | Periodically emits `AirBubble` |
+    | `BigBubble` / `BigBubbleHolder` | Giant bubble | Transport bubble for Mario |
+    | `Shellfish` | Clam | Opens and closes; can contain item |
+  </Accordion>
+
+  <Accordion title="Astro Observatory objects">
+    Objects specific to the hub world, Comet Observatory / Astro Observatory.
+
+    | Class | Object | Notes |
+    |---|---|---|
+    | `AstroDome` | Dome building | Each dome leads to a galaxy |
+    | `AstroCore` | Observatory core | Central power star socket |
+    | `AstroMapBoard` | Map board | Displays galaxy select map |
+    | `AstroMapObj` | Generic observatory object | Base for observatory decoration |
+    | `AstroOverlookObj` | Overlook object | Scenic decoration near observatory |
+    | `AstroDomeAsteroid` | Dome asteroid | Flying rock near domes |
+    | `AstroDomeBlueStar` | Blue star | Decorative orbiting star |
+    | `AstroDomeComet` | Comet | Fast-moving comet decoration |
+    | `AstroDomeOrbit` | Orbit ring | Animated orbit trajectory |
+    | `AstroCountDownPlate` | Countdown plate | Displays comet arrival timer |
+    | `MiniatureGalaxy` | Miniature galaxy | Small galaxy model in hub |
+  </Accordion>
+
+  <Accordion title="Spin drivers and launch stars">
+    Objects that launch Mario to a new area.
+
+    | Class | Object | Notes |
+    |---|---|---|
+    | `SpinDriver` | Launch star | Standard spin-powered launch star |
+    | `SuperSpinDriver` | Super launch star | Faster variant |
+    | `SpinDriverCamera` | Camera controller | Handles the launch camera cut |
+    | `SpinDriverShootPath` | Shoot path | Defines the launch trajectory |
+    | `MarioLauncher` | Cannon | Barrel cannon that fires Mario |
+    | `WarpPod` | Warp pod | Warp point between galaxy sections |
+    | `DashRing` | Dash ring | Boosts Mario's speed through ring |
+    | `PrizeRing` | Prize ring | Spin through to collect star bits |
+    | `JumpStand` | Jump panel | Bounces Mario upward |
+    | `JumpHole` | Jump hole | Drops Mario to a lower area |
+  </Accordion>
+</AccordionGroup>
+
+### Coin — full state machine example
+
+`Coin` illustrates the level of detail typical in `MapObj` classes: it has nine distinct nerve states, can appear in multiple ways, and tracks water submersion and purple coin variants.
+
+```cpp
+class Coin : public LiveActor {
+public:
+    virtual void init(const JMapInfoIter&);
+    virtual void appear();
+    virtual void calcAndSetBaseMtx();
+    virtual bool receiveOtherMsg(u32, HitSensor*, HitSensor*);
+
+    // Appear variants
+    void appearFix();
+    void appearFixTimer(s32, s32);
+    void appearMove(const TVec3f&, const TVec3f&, s32, s32);
+    void appearHop(const TVec3f&, const TVec3f&);
+
+    // Nerve execute methods
+    void exeNonActive();
+    void exeFix();
+    void exeFixHide();
+    void exeFixTimer();
+    void exeMove();
+    void exeControled();
+    void exeSpinDrained();
+    void exeHop();
+
+    CoinHostInfo* mHostInfo;   // 0x8C
+    FlashingCtrl* mFlashCtrl;  // 0x90
+    PartsModel* mAirBubble;    // 0x94
+    TVec3f mDropPosition;      // 0x98
+    s32 mCannotTime;           // 0xB4
+    bool mIsInWater;           // 0xB8
+    bool mIsPurpleCoin;        // 0xBC
+    bool mIsNeedBubble;        // 0xBD
+};
+```
+
+<Tip>
+  `MapObjActorUtil` provides static helpers for starting, stopping, and pausing the rotator and rail mover on any `MapObjActor`. Use `MapObjActorUtil::isRailMoverReachedEnd` to check if a moving platform has completed its path, and `MapObjActorUtil::startBreak` to trigger a breakable object's destruction sequence.
+</Tip>

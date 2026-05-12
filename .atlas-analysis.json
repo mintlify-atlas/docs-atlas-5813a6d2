@@ -1,28 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "Petari",
+  "projectType": "general",
+  "projectName": "Petari",
+  "projectDescription": "A work-in-progress decompilation of Super Mario Galaxy 1 for the Nintendo Wii, reconstructing the original C++ source code from the game binary.",
   "theme": "aspen",
-  "colors": {
-    "primary": "#646464",
-    "light": "#050505",
-    "dark": "#bcbcbc"
-  },
-  "favicon": "https://media.brand.dev/499ff1ee-e92b-4652-80a2-999b7f573d77.svg",
-  "logo": {
-    "light": "https://media.brand.dev/b0b51344-fcfe-49fc-8e38-0cace2f9cf82.svg",
-    "dark": "https://media.brand.dev/b0b51344-fcfe-49fc-8e38-0cace2f9cf82.svg"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/SMGCommunity/Petari"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/SMGCommunity/Petari"
-    }
-  },
+  "primaryColor": "#646464",
+  "lightColor": "#050505",
+  "darkColor": "#bcbcbc",
   "navigation": {
     "tabs": [
       {
@@ -104,5 +87,27 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "Faithful C++ decompilation of Super Mario Galaxy 1 (Korean versions RMGK01 and RMGK02)",
+    "Build system using Python (configure.py) and Ninja for automated compilation and verification",
+    "Binary-matching verification with objdiff for per-function accuracy checking",
+    "Comprehensive symbol and split configuration (symbols.txt, splits.txt)",
+    "Coverage of all major game subsystems: gravity, camera, physics, animation, audio, AI, and rendering",
+    "CodeWarrior 3.0a3 compiler targeting PowerPC (Gekko) for accurate code generation",
+    "CI integration via GitHub Actions for automated build and decompilation progress tracking",
+    "Extensive game object hierarchy: LiveActor, NameObj, MapObj, AreaObj, Enemy, Boss, Player"
+  ],
+  "publicApiSurface": [
+    "LiveActor (base class for all interactive game objects)",
+    "NameObj (base object in the game's object hierarchy)",
+    "Nerve / Spine (state machine system for actor behavior)",
+    "HitSensor / SensorHitChecker (collision detection interface)",
+    "PlanetGravityManager / GravityInfo (multi-directional gravity system)",
+    "CameraDirector / CameraMan (camera management)",
+    "configure.py (build system entry point: python configure.py)",
+    "splits.txt (file split definitions for decompiled translation units)",
+    "symbols.txt (symbol address and type definitions)",
+    "objdiff (binary diff tool for matching verification)"
+  ]
 }

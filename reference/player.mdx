@@ -1,0 +1,262 @@
+---
+title: "Player subsystem: Mario actor and controls"
+description: "Classes covering Mario's movement, physics, animation, power-ups, and all state modules that drive the player character in Super Mario Galaxy 1."
+---
+
+The player subsystem is the largest and most complex subsystem in Petari. It is split across roughly sixty headers under `include/Game/Player/` and covers everything from raw physics integration to animation blending, power-up transformations, wall climbing, swimming, tornado spinning, and camera interaction. The central class is `MarioActor`, which extends `LiveActor` and owns a `Mario` object that handles moment-to-moment physics and state transitions.
+
+<Note>
+  `MarioActor` is about 0xFD0 bytes in size and aggregates multiple sub-modules. When reading decompiled code, check `Mario.hpp` for low-level physics state and `MarioActor.hpp` for the top-level lifecycle and draw methods.
+</Note>
+
+## Core classes
+
+<AccordionGroup>
+  <Accordion title="MarioActor — top-level player actor">
+    `MarioActor` inherits `LiveActor` and is the object registered with the scene graph. It manages health, player mode (normal, bee, ice, fire, etc.), model switching, effect playback, and the game-over state machine.
+
+    ```cpp
+    class MarioActor : public LiveActor {
+    public:
+        MarioActor(const char*);
+
+        virtual const TVec3f& getLastMove() const;
+        virtual void getFrontVec(TVec3f*) const;
+
+        void init(const JMapInfoIter&);
+        void control();
+        void movement();
+
+        // Health management
+        void decLife(u16);
+        void incLife(u32);
+        void changeMaxLife(s32);
+
+        // Power-up state
+        void initBeeMario();
+        void initIceMario();
+        void initFireBall();
+        void initTornadoMario();
+        void shootFireBall();
+        void doFreezeAttack();
+        bool trySpinPunch();
+        bool isEnableSpinPunch();
+
+        // Spin / rush attack
+        bool doRush();
+        void endRush(const RushEndInfo*);
+
+        // Gravity helpers
+        TVec3f& getGravityVec() const;
+        void updateGravityVec(bool, bool);
+        bool isInZeroGravitySpot() const;
+        f32 getGravityRatio() const;
+
+        // State query
+        bool isJumping() const;
+        bool isPunching() const;
+        bool isDamaging() const;
+        bool isStaggering() const;
+        bool isRequestSpin() const;
+
+        u32 mHealth;       // 0x380
+        u32 mWaterLife;    // 0x384
+        u32 mMaxHealth;    // 0x3E0
+        u16 mPlayerMode;   // 0x3D4
+        Mario* mMario;     // 0x230
+        MarioAnimator* mMarioAnim;  // 0x234
+        MarioEffect* mMarioEffect;  // 0x238
+        MarioConst* mConst;         // 0x23C
+        TornadoMario* mTornadoMario;// 0x98C
+        bool mSuperKinokoCollected; // 0xEE8
+        bool mPowerupCollected;     // 0xEE9
+        bool mTransforming;         // 0xEEA
+        BlackHole* mBlackHole;      // (member near 0xF4C)
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Mario — physics and state machine core">
+    `Mario` extends `MarioModule` and is the physics brain of the player. It holds position, velocity, movement direction vectors, all wall/ground collision state, and every movement sub-module as a pointer member. The `MovementStates` bitfield tracks boolean physics flags such as `jumping` and `digitalJump`.
+
+    ```cpp
+    class Mario : public MarioModule {
+    public:
+        Mario(MarioActor*);
+
+        virtual bool postureCtrl(MtxPtr);
+
+        void update();
+        void actionMain();
+        void mainMove();
+        void checkGround();
+        void updateGroundInfo();
+
+        // Jump variants
+        void tryJump();
+        void tryTurnJump();
+        void trySquatJump();
+        void tryBackJump();
+        void tryTornadoJump();
+        void trySpinJump(u8);
+        void tryWallJump(const TVec3f&, bool);
+        void tryStickJump(const TVec3f&);
+
+        // Damage / hazard reactions
+        void damage(const TVec3f&);
+        void damageLarge(const TVec3f&);
+        void doFireDance();
+        void doParalyze();
+        void doFreeze();
+        void doAbyssDamage();
+
+        // State management
+        void changeStatus(MarioState*);
+        u32 getCurrentStatus() const;
+
+        struct MovementStates {
+            unsigned jumping    : 1;  // bit 0
+            unsigned turning    : 1;  // bit 3
+            unsigned debugMode  : 1;  // bit 22
+            unsigned digitalJump: 1;  // bit 30
+            // ... additional reserved bits
+        };
+
+        /* 0x130 */ TVec3f mPosition;
+        /* 0x160 */ TVec3f mVelocity;
+        /* 0x1C0 */ TVec3f mStickPos;
+        /* 0x1D8 */ TVec3f mAirGravityVec;
+        /* 0x1F0 */ TVec3f mHeadVec;
+        /* 0x208 */ TVec3f mFrontVec;
+        /* 0x310 */ TVec3f mSideVec;
+        /* 0x488 */ f32 mVerticalSpeed;
+        /* 0x758 */ MarioWall* mWall;
+        /* 0x768 */ MarioStick* mStick;
+        /* 0x8A0 */ MarioMove* mMove;
+        /* 0x884 */ MarioSwim* mSwim;
+        /* 0x7C0 */ MarioDamage* mDamage;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="MarioState — base class for all movement states">
+    Every discrete movement mode (walk, swim, hang, slide, etc.) is a `MarioState`. Each state reports whether it is active and can react to wall hits, polygon contacts, and ring passes.
+
+    ```cpp
+    class MarioState : public MarioModule {
+    public:
+        MarioState(MarioActor*, u32);
+
+        virtual void init();
+        virtual bool proc(u32);
+        virtual bool start();
+        virtual bool close();
+        virtual bool update();
+        virtual bool notice();
+        virtual bool keep();
+        virtual bool postureCtrl(MtxPtr);
+        virtual void hitWall(const TVec3f&, HitSensor*);
+        virtual void hitPoly(u8, const TVec3f&, HitSensor*);
+        virtual bool passRing(const HitSensor*);
+        virtual f32 getBlurOffset() const;
+
+        u32 getNoticedStatus() const;
+
+        MarioState* _8;
+        u32 mStatusId;  // 0xC
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="MarioMove — ground movement state">
+    `MarioMove` specializes `MarioState` to handle running and walking on surfaces.
+
+    ```cpp
+    class MarioMove : public MarioState {
+    public:
+        MarioMove(MarioActor*);
+        void initAfter();
+    };
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Movement sub-modules
+
+The `Mario` object aggregates a large set of specialized sub-modules, each responsible for one movement mode. All inherit `MarioModule`.
+
+<CardGroup cols={2}>
+  <Card title="MarioSwim" icon="water">
+    Underwater swimming physics, water entry/exit detection, and water-damage timer.
+  </Card>
+  <Card title="MarioSlider" icon="angles-down">
+    Slide mechanics activated on slope surfaces flagged with the slider floor code.
+  </Card>
+  <Card title="MarioHang" icon="hand">
+    Hanging from ledges and ceiling grips, including back-hang and side-hang checks.
+  </Card>
+  <Card title="MarioClimb" icon="mountain">
+    Wall-climbing on climbable surfaces, vertical movement, and jump-off transitions.
+  </Card>
+  <Card title="MarioWall" icon="wall-brick">
+    Wall-stick detection, wall-run state, and position correction against wall geometry.
+  </Card>
+  <Card title="MarioDamage" icon="heart-crack">
+    Normal damage reaction: stagger animation, invincibility timer, and life decrement.
+  </Card>
+  <Card title="MarioFireDamage / MarioFireDance" icon="fire">
+    Fire-based hazard reactions: catching fire, running in panic, and the fire dance anim.
+  </Card>
+  <Card title="MarioFreeze" icon="snowflake">
+    Ice freeze encasement state with thaw animation and break-out timing.
+  </Card>
+</CardGroup>
+
+## Player sub-module list
+
+The full `Player/` directory includes the following headers (selected):
+
+| Header | Purpose |
+|---|---|
+| `MarioActor.hpp` | Top-level player `LiveActor` |
+| `Mario.hpp` | Physics core and state dispatch |
+| `MarioState.hpp` | Abstract base for all movement states |
+| `MarioMove.hpp` | Ground movement |
+| `MarioSwim.hpp` | Swimming |
+| `MarioHang.hpp` | Hanging from ledges |
+| `MarioClimb.hpp` | Climbable wall movement |
+| `MarioSlider.hpp` | Slide on slopes |
+| `MarioSkate.hpp` | Ice skating |
+| `MarioWall.hpp` | Wall-stick and wall-run |
+| `MarioDamage.hpp` | Standard damage reaction |
+| `MarioFireDamage.hpp` | Fire hazard reaction |
+| `MarioFireDance.hpp` | On-fire animation state |
+| `MarioFreeze.hpp` | Ice encasement |
+| `MarioCrush.hpp` | Crush / press-down death |
+| `MarioParalyze.hpp` | Electric paralysis |
+| `MarioStun.hpp` | Stun reaction |
+| `MarioBlown.hpp` | Blow-back from explosion |
+| `MarioFaint.hpp` | Faint / flip reaction |
+| `MarioAbyssDamage.hpp` | Abyss / fall-out-of-bounds death |
+| `MarioDarkDamage.hpp` | Shadow / dark matter damage |
+| `MarioWarp.hpp` | Warp pipe and cube-warp transitions |
+| `MarioRecovery.hpp` | Recovery bubble warp-back |
+| `MarioFlip.hpp` | Flip / back-roll reaction |
+| `MarioSideStep.hpp` | Side-step dodge |
+| `MarioFrontStep.hpp` | Front-step reaction |
+| `MarioStick.hpp` | Star-pointer sticky bind |
+| `MarioRabbit.hpp` | Rabbit / Boo-ray mode |
+| `MarioTeresa.hpp` | Boo Mario transformation |
+| `MarioFoo.hpp` | Bee Mario state |
+| `MarioSukekiyo.hpp` | Special movement variant |
+| `TornadoMario.hpp` | Tornado spin move |
+| `FireMarioBall.hpp` | Fireball projectile owned by Mario |
+| `MarioAnimator.hpp` | Animation controller |
+| `MarioEffect.hpp` | Particle effect manager |
+| `MarioConst.hpp` | Tuning constants (speeds, timers) |
+| `MarioMessenger.hpp` | Cross-system message dispatch |
+| `GhostPlayer.hpp` | Luigi ghost playback |
+
+<Tip>
+  `MarioConst` centralizes all tunable numeric parameters such as walk speed, jump velocity, and gravity ratio. When analysing decompiled movement code, cross-reference member reads against `MarioConst` offsets to understand what each scalar controls.
+</Tip>

@@ -1,0 +1,276 @@
+---
+title: "Camera system: types and management"
+description: "How Petari's camera architecture uses CameraDirector, CameraMan, and dozens of specialized camera types paired with Translator classes."
+---
+
+The camera system is built around a director–operator separation. `CameraDirector` is the singleton that owns the active camera stack and drives the view matrix each frame. It does not compute camera positions itself; instead it delegates to whichever `CameraMan` is currently on top of the stack. Each `CameraMan` owns a concrete `Camera` subclass that implements the actual position-and-target calculation. A paired `CamTranslator*` class interprets BCSV parameter chunks from stage files and feeds them into the matching camera object, keeping data loading completely decoupled from the camera logic.
+
+## CameraDirector
+
+`CameraDirector` is a `NameObj` singleton (retrieved via `MR::getCameraDirector()`). It maintains a stack of up to eight `CameraMan` pointers and calls the top-most one every frame.
+
+```cpp
+class CameraDirector : public NameObj {
+public:
+    CameraDirector(const char*);
+
+    virtual void init(const JMapInfoIter&);
+    virtual void movement();
+
+    void push(CameraMan*);
+    CameraMan* pop();
+    CameraMan* getCurrentCameraMan() const;
+
+    void startEvent(s32, const char*, const CameraTargetArg&, s32);
+    void endEvent(s32, const char*, bool, s32);
+
+    bool isInterpolationOff();
+    bool isSubjectiveCamera() const;
+    bool isRotatingHard() const;
+    bool isEnableToControl() const;
+
+    CameraTargetObj*       mUsedTarget;        // current follow target
+    CameraManStack*        mStack;             // up to 8 CameraMan entries
+    CameraManGame*         mCameraManGame;     // normal gameplay camera
+    CameraManEvent*        mCameraManEvent;    // cutscene camera
+    CameraManPause*        mCameraManPause;    // pause-menu camera
+    CameraManSubjective*   mCameraManSubjective;
+    CameraViewInterpolator* mViewInterpolator; // smooth transition blending
+    CameraShaker*          mShaker;            // screen-shake controller
+};
+```
+
+## CameraMan
+
+`CameraMan` is the base class for the four operator variants (Game, Event, Pause, Subjective). It owns a `CameraPoseParam` and forwards `calc()` to the concrete `Camera` held by its subclass.
+
+```cpp
+class CameraMan : public NameObj {
+public:
+    CameraMan(const char*);
+
+    virtual void calc();
+    virtual void notifyActivate();
+    virtual void notifyDeactivate();
+    virtual bool isInterpolationOff() const;
+    virtual bool isCollisionOff() const;
+    virtual bool isEnableToReset() const;
+    virtual bool isEnableToRoundLeft() const;
+    virtual bool isEnableToRoundRight() const;
+    virtual void roundLeft();
+    virtual void roundRight();
+
+    void activate(CameraDirector*);
+    void deactivate(CameraDirector*);
+
+    CameraDirector*  mDirector;   // back-pointer to the director
+    CameraPoseParam* mPoseParam;  // output: eye, at, up, fovy
+    bool             mIsActivated;
+    TMtx34f          mMatrix;     // last computed view matrix
+};
+```
+
+## Camera base class
+
+All concrete cameras derive from `Camera`. The key virtual method is `calc()`, which writes a new pose into `mPoseParam` and returns the target object that influenced the result.
+
+```cpp
+class Camera : public NameObj {
+public:
+    virtual void reset();
+    virtual CameraTargetObj* calc() = 0;
+    virtual bool isInterpolationOff() const;
+    virtual bool isCollisionOff() const;
+    virtual CamTranslatorBase* createTranslator();
+
+    CameraMan*        mCameraMan;
+    CameraPoseParam*  mPoseParam;
+    CameraHeightArrange* mVPan;  // optional vertical-pan helper
+    TMtx34f           mZoneMatrix;
+};
+```
+
+## Camera type families
+
+### Follow cameras
+
+Follow cameras track the player from behind and allow the player to rotate the camera left or right.
+
+<CardGroup cols={2}>
+  <Card title="CameraFollow" icon="video">
+    Standard over-the-shoulder follow camera. Supports optional orbit-left/orbit-right and automatic height adjustment.
+
+    ```cpp
+    class CameraFollow : public Camera {
+    public:
+        CameraFollow(const char* pName = "フォローカメラ");
+        virtual CameraTargetObj* calc();
+        virtual bool isEnableToRoundLeft() const;
+        virtual bool isEnableToRoundRight() const;
+        virtual bool isEnableToReset() const;
+        virtual CamTranslatorBase* createTranslator();
+    };
+    ```
+  </Card>
+
+  <Card title="CameraRailFollow" icon="route">
+    Follow camera whose eye position is constrained to a designer-placed rail path. Used in tube-like corridors and narrow passages.
+
+    ```cpp
+    class CameraRailFollow : public Camera {
+    public:
+        CameraRailFollow(const char* pName = "レールフォローカメラ");
+        virtual CameraTargetObj* calc();
+        virtual CamTranslatorBase* createTranslator();
+    };
+    ```
+  </Card>
+
+  <Card title="CameraRaceFollow" icon="flag-checkered">
+    Follow camera variant tuned for racing sequences with a wider field of view and faster catch-up speed.
+  </Card>
+
+  <Card title="CameraWaterFollow" icon="droplet">
+    Follow camera used when the player is swimming, with adjustments for the underwater view angle.
+  </Card>
+</CardGroup>
+
+### Fixed cameras
+
+Fixed cameras lock either the eye position, the target position, or both, and do not allow player rotation.
+
+| Class | Japanese name | Behaviour |
+|---|---|---|
+| `CameraFix` | `完全固定カメラ` | Fully fixed eye and target |
+| `CameraFixedPoint` | `定点カメラ` | Fixed eye, tracks player as target |
+| `CameraFixedThere` | `その場定点カメラ` | Fixed relative to where the player stood when the camera activated |
+
+```cpp
+class CameraFix : public Camera {
+public:
+    CameraFix(const char* pName = "完全固定カメラ");
+    virtual CameraTargetObj* calc();
+    virtual CamTranslatorBase* createTranslator();
+    void setParam(const TVec3f& eye, const TVec3f& at, const TVec3f& up);
+
+    CameraTargetMtx* mTarget;
+};
+
+class CameraFixedPoint : public Camera {
+public:
+    CameraFixedPoint(const char* pName = "定点カメラ");
+    virtual CameraTargetObj* calc();
+    virtual CamTranslatorBase* createTranslator();
+};
+
+class CameraFixedThere : public Camera {
+public:
+    CameraFixedThere(const char* pName = "その場定点カメラ");
+    virtual CameraTargetObj* calc();
+    virtual bool isCorrectingErpPositionOff() const;
+    virtual CamTranslatorBase* createTranslator();
+};
+```
+
+### Planet-specific cameras
+
+These cameras are designed for specific stage geometry types. Each one pairs with a matching `CamTranslator*` class.
+
+<AccordionGroup>
+  <Accordion title="CameraWaterPlanet — water-sphere stages">
+    Used in water-planet stages. Maintains axis offsets `mAxisX` and `mAxisY` and a configurable `mAngleA` to keep the camera outside the water volume.
+
+    ```cpp
+    class CameraWaterPlanet : public Camera {
+    public:
+        CameraWaterPlanet(const char* pName = "水中プラネットカメラ");
+        virtual CameraTargetObj* calc();
+        virtual CamTranslatorBase* createTranslator();
+
+        f32 mAxisX;
+        f32 mAxisY;
+        f32 mAngleA;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="CameraCubePlanet — cube-shaped stages">
+    Handles the sharp 90-degree gravity transitions of cube planets. Stores `mDist`, `mAngleA`, and `mAngleB` to control the orbit arc.
+
+    ```cpp
+    class CameraCubePlanet : public Camera {
+    public:
+        CameraCubePlanet(const char* pName = "キューブ惑星カメラ");
+        virtual CameraTargetObj* calc();
+        virtual CamTranslatorBase* createTranslator();
+
+        f32 mDist;
+        f32 mAngleA;
+        f32 mAngleB;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="CameraMedianPlanet / CameraMedianTower">
+    Cameras for stages with a central median plane (e.g., toroidal or tower-shaped levels).
+  </Accordion>
+
+  <Accordion title="CameraInwardSphere / CameraInnerCylinder">
+    Used when the player walks on the *inside* of a sphere or cylinder. The camera faces inward rather than outward.
+  </Accordion>
+</AccordionGroup>
+
+### Boss cameras
+
+<AccordionGroup>
+  <Accordion title="CameraTripodBoss — Tripod Boss arena">
+    Extends `CameraTower` with an extra `upZ` field that adjusts the up vector to handle the three-legged boss's arena layout.
+
+    ```cpp
+    class CameraTripodBoss : public CameraTower {
+    public:
+        CameraTripodBoss(const char* pName = "三脚ボスカメラ");
+        virtual CameraTargetObj* calc();
+        virtual CamTranslatorBase* createTranslator();
+
+        f32 upZ;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="CameraWaterPlanetBoss">
+    Variant of `CameraWaterPlanet` tuned for the water-planet boss encounter.
+  </Accordion>
+
+  <Accordion title="CameraFooFighter / CameraFooFighterPlanet">
+    Camera modes for the saucer (Foo Fighter) enemy boss segments.
+  </Accordion>
+</AccordionGroup>
+
+## The CamTranslator pattern
+
+Every concrete `Camera` subclass has a matching `CamTranslator*` class that implements `CamTranslatorBase`. The translator is responsible for reading a `CameraParamChunk` loaded from a stage BCSV file and calling the appropriate `setParam` method on its camera.
+
+```cpp
+class CamTranslatorBase {
+public:
+    virtual void setParam(const CameraParamChunk*) = 0;
+    virtual Camera* getCamera() const = 0;
+};
+
+// Example: the translator for CameraFollow
+class CamTranslatorFollow : public CamTranslatorBase {
+public:
+    CamTranslatorFollow(CameraFollow*);
+    virtual void setParam(const CameraParamChunk*);
+    virtual Camera* getCamera() const;
+
+    CameraFollow* mCamera;
+};
+```
+
+<Tip>
+Every `Camera::createTranslator()` override returns a `new CamTranslator*` of the matching type. `GameCameraCreator` calls this factory method when building cameras from stage data, so the pairing is always enforced by construction.
+</Tip>
+
+The complete translator roster mirrors the camera roster one-for-one: `CamTranslatorFix`, `CamTranslatorRailFollow`, `CamTranslatorWaterPlanet`, `CamTranslatorTripodBoss`, and so on for every camera type in the game.

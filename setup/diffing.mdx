@@ -1,0 +1,34 @@
+---
+title: "Diff decompiled functions against the original with objdiff"
+description: "Use objdiff to compare your decompiled C++ output against the original game binary and confirm that each function is a byte-for-byte match."
+---
+
+objdiff is a graphical tool that places your compiled output side-by-side with the original game binary and highlights any differences at the assembly instruction level. It lets you iterate on a function — adjusting C++ code, compiler flags, or inline hints — and immediately see whether the output matches the original. This tight feedback loop is the core workflow for writing matched functions in Petari.
+
+After the initial build succeeds, an `objdiff.json` configuration file is created automatically in the project root. objdiff reads this file to know where to find the build artifacts and original binaries.
+
+<Steps>
+  <Step title="Download objdiff">
+    Download the latest release of objdiff from [encounter/objdiff](https://github.com/encounter/objdiff/releases) for your operating system.
+  </Step>
+  <Step title="Set the project directory">
+    Open objdiff and go to **Project settings**. Set **Project directory** to the root of your Petari checkout (the folder that contains `objdiff.json`). The configuration is loaded automatically.
+  </Step>
+  <Step title="Select a function to diff">
+    Use the left sidebar to browse the list of objects. Select any function to open the diff view. The left pane shows your compiled output; the right pane shows the original binary. Matching instructions are highlighted in green, differences in red.
+  </Step>
+  <Step title="Edit and watch the rebuild">
+    Make changes to your source files and save. objdiff watches the project directory and triggers an automatic Ninja rebuild whenever any of the following files change:
+
+    - C++ source files or headers under `src/`
+    - `configure.py`
+    - `splits.txt`
+    - `symbols.txt`
+
+    The diff view updates as soon as the rebuild completes, so you can see the effect of each change immediately.
+
+    <Note>
+      When running under WSL on Windows, objdiff cannot receive filesystem notifications from the Windows filesystem. Automatic rebuilds will not trigger. Use native Windows tooling or run `ninja` manually after each change.
+    </Note>
+  </Step>
+</Steps>

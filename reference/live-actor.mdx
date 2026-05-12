@@ -1,0 +1,223 @@
+---
+title: "LiveActor: the base game object class"
+description: "LiveActor is the base class for every interactive object in Super Mario Galaxy, combining a transform, subsystem pointers, and a Nerve state machine."
+---
+
+`LiveActor` is the foundation of almost every interactive entity in Super Mario Galaxy — enemies, power-ups, platforms, hazards, and more all derive from it. It extends [`NameObj`](/reference/name-obj) with a full transform (position, rotation, scale, velocity, gravity), a set of optional subsystem pointers (model, animation, collision, audio, effects, rails), and the Nerve/Spine state machine that drives per-frame behaviour.
+
+## Class definition
+
+```cpp
+// include/Game/LiveActor/LiveActor.hpp
+
+class LiveActor : public NameObj {
+public:
+    LiveActor(const char* pName);
+    virtual ~LiveActor() {}
+
+    // Called when the actor is placed into the scene via a JMapInfo iterator
+    virtual void init(const JMapInfoIter& rIter) override;
+
+    virtual void movement();
+    virtual void calcAnim();
+    virtual void calcViewAndEntry();
+    virtual void appear();
+    virtual void makeActorAppeared();
+    virtual void kill();
+    virtual void makeActorDead();
+    virtual bool receiveMessage(u32 msg, HitSensor* pSender, HitSensor* pReceiver);
+
+    virtual MtxPtr getBaseMtx() const;
+    virtual MtxPtr getTakingMtx() const;
+    virtual void startClipped();
+    virtual void endClipped();
+    virtual void control();
+    virtual void calcAndSetBaseMtx();
+    virtual void updateHitSensor(HitSensor* pSensor);
+    virtual void attackSensor(HitSensor* pSender, HitSensor* pReceiver);
+    virtual bool receiveMsgPush(HitSensor* pSender, HitSensor* pReceiver);
+    virtual bool receiveMsgPlayerAttack(u32 msg, HitSensor* pSender, HitSensor* pReceiver);
+    virtual bool receiveMsgEnemyAttack(u32 msg, HitSensor* pSender, HitSensor* pReceiver);
+    virtual bool receiveMsgTake(HitSensor* pSender, HitSensor* pReceiver);
+    virtual bool receiveMsgTaken(HitSensor* pSender, HitSensor* pReceiver);
+    virtual bool receiveMsgThrow(HitSensor* pSender, HitSensor* pReceiver);
+    virtual bool receiveMsgApart(HitSensor* pSender, HitSensor* pReceiver);
+    virtual bool receiveOtherMsg(u32 msg, HitSensor* pSender, HitSensor* pReceiver);
+
+    // Non-virtual helpers
+    void setNerve(const Nerve* pNerve);
+    bool isNerve(const Nerve* pNerve) const;
+    s32 getNerveStep() const;
+    HitSensor* getSensor(const char* pSensorName) const;
+    void initModelManagerWithAnm(const char* pModelArcName, const char* pAnimArcName, bool);
+    void initNerve(const Nerve*);
+    void initHitSensor(int);
+    void initBinder(f32, f32, u32);
+    void initRailRider(const JMapInfoIter& rIter);
+    void initEffectKeeper(int, const char*, bool);
+    void initSound(int, bool);
+
+    /* 0x0C */ TVec3f mPosition;    // World-space location
+    /* 0x18 */ TVec3f mRotation;    // Euler rotation in degrees
+    /* 0x24 */ TVec3f mScale;       // Per-axis scale
+    /* 0x30 */ TVec3f mVelocity;    // Units per step
+    /* 0x3C */ TVec3f mGravity;     // Unit vector, default (0, -1, 0)
+    /* 0x48 */ ModelManager*        mModelManager;
+    /* 0x4C */ ActorAnimKeeper*     mAnimKeeper;
+    /* 0x50 */ Spine*               mSpine;
+    /* 0x54 */ HitSensorKeeper*     mSensorKeeper;
+    /* 0x58 */ Binder*              mBinder;
+    /* 0x5C */ RailRider*           mRailRider;
+    /* 0x60 */ EffectKeeper*        mEffectKeeper;
+    /* 0x64 */ AudAnmSoundObject*   mSoundObject;
+    /* 0x68 */ LiveActorFlag        mFlag;
+    /* 0x74 */ ShadowControllerList* mShadowControllerList;
+    /* 0x78 */ CollisionParts*      mCollisionParts;
+    /* 0x7C */ StageSwitchCtrl*     mStageSwitchCtrl;
+    /* 0x80 */ StarPointerTarget*   mStarPointerTarget;
+    /* 0x84 */ ActorLightCtrl*      mActorLightCtrl;
+    /* 0x88 */ ActorPadAndCameraCtrl* mCameraCtrl;
+};
+```
+
+<Note>
+  The order of virtual functions in the declaration above matches the vtable
+  layout in the original binary. Subclasses that override them must preserve
+  this order to achieve a matching build.
+</Note>
+
+## Lifecycle
+
+Every `LiveActor` follows a fixed lifecycle managed by the scene executor.
+
+```
+init()              ← called once when the scene loads the actor from JMapInfo
+  └─ appear()       ← makes the actor active; calls makeActorAppeared()
+       └─ movement()  ← called every frame while the actor is alive
+            └─ kill()  ← deactivates the actor; calls makeActorDead()
+                          (actor may appear/kill repeatedly)
+```
+
+The constructor registers the actor with `AllLiveActorGroup` and the `ClippingDirector` automatically:
+
+```cpp
+// src/Game/LiveActor/LiveActor.cpp
+LiveActor::LiveActor(const char* pName)
+    : NameObj(pName),
+      mPosition(0.0f, 0.0f, 0.0f),
+      mRotation(0.0f, 0.0f, 0.0f),
+      mScale(1.0f, 1.0f, 1.0f),
+      mVelocity(0.0f, 0.0f, 0.0f),
+      mGravity(0.0f, -1.0f, 0.0f),
+      /* all pointer members initialised to nullptr */ {
+    MR::getAllLiveActorGroup()->registerActor(this);
+    MR::getClippingDirector()->registerActor(this);
+}
+```
+
+`makeActorAppeared()` validates hit sensors and collision, clears the dead flag, and connects the actor to the scene's draw and movement lists. `makeActorDead()` zeroes velocity, clears hit sensors, and disconnects the actor.
+
+## The Nerve/Spine state machine
+
+`LiveActor` uses a two-class system to represent stateful behaviour.
+
+<AccordionGroup>
+  <Accordion title="Nerve — a single state">
+    A `Nerve` represents one state. Its `execute` method is called every frame
+    while the actor is in that state. `executeOnEnd` is called on the last frame
+    before a state transition.
+
+    ```cpp
+    // include/Game/LiveActor/Nerve.hpp
+    class Nerve {
+    public:
+        virtual void execute(Spine* pSpine) const = 0;
+        virtual void executeOnEnd(Spine* pSpine) const;
+    };
+    ```
+
+    Several convenience macros create concrete `Nerve` subclasses and wire them
+    to actor member functions:
+
+    ```cpp
+    // Declares a nerve that calls actor->myFunc() each frame
+    NERVE_DECL(NrvMyState, MyActor, myFunc)
+
+    // Declares a nerve with both execute and executeOnEnd callbacks
+    NERVE_DECL_ONEND(NrvMyState, MyActor, myFunc, myEndFunc)
+
+    // Declares a nerve with an empty execute body (idle/wait states)
+    NERVE_DECL_NULL(NrvIdle)
+    ```
+
+    Each concrete `Nerve` class has a static singleton instance accessed via
+    `ClassName::sInstance`.
+  </Accordion>
+  <Accordion title="Spine — the state machine manager">
+    A `Spine` owns the current and next `Nerve` pointers and the frame counter
+    (`mStep`). Calling `update()` each frame either increments `mStep` or, if
+    `setNerve` was called, transitions to the new state.
+
+    ```cpp
+    // include/Game/LiveActor/Spine.hpp
+    class Spine {
+    public:
+        Spine(void*, const Nerve*);
+
+        void update();
+        void setNerve(const Nerve*);
+        const Nerve* getCurrentNerve() const;
+
+        /* 0x00 */ void*              mExecutor;   // the owning LiveActor
+        /* 0x04 */ const Nerve*       mCurrNerve;
+        /* 0x08 */ const Nerve*       mNextNerve;
+        /* 0x0C */ s32                mStep;       // frames in current state
+        /* 0x10 */ ActorStateKeeper*  mStateKeeper;
+    };
+    ```
+
+    `LiveActor` exposes the spine through `mSpine` and provides helpers:
+
+    ```cpp
+    actor->setNerve(&NrvMyState::sInstance);  // queue a transition
+    actor->isNerve(&NrvMyState::sInstance);   // check current state
+    actor->getNerveStep();                    // frames in current state
+    ```
+  </Accordion>
+  <Accordion title="ActorStateBase — reusable state objects">
+    For complex states that need their own member variables, the game uses
+    `ActorStateBase<T>`, a templated base that holds a back-pointer to the
+    owning actor:
+
+    ```cpp
+    // include/Game/LiveActor/ActorStateBase.hpp
+    template <typename T>
+    class ActorStateBase : public ActorStateBaseInterface {
+    public:
+        ActorStateBase(const char* pName, T* pActor)
+            : ActorStateBaseInterface(pName), mHost(pActor) {}
+
+        inline T* getHost() const { return mHost; }
+        /* 0xC */ T* mHost;
+    };
+    ```
+
+    `ActorStateBaseInterface` itself provides `appear()`, `kill()`, and a
+    virtual `update()` that drives its own nerve loop.
+  </Accordion>
+</AccordionGroup>
+
+## Key virtual functions
+
+| Function | Purpose |
+|---|---|
+| `init(rIter)` | One-time setup; read placement data from `JMapInfo`. |
+| `appear()` | Make the actor visible and active. Delegates to `makeActorAppeared()`. |
+| `kill()` | Deactivate the actor. Delegates to `makeActorDead()`. |
+| `movement()` | Per-frame logic: advance the spine, call `control()`. |
+| `calcAnim()` | Update skeletal and material animation. |
+| `calcViewAndEntry()` | Frustum-cull and queue for rendering. |
+| `control()` | Override point for per-frame game logic (called from `movement()`). |
+| `receiveMessage()` | Dispatch an incoming `HitSensor` message. |
+| `getBaseMtx()` | Return the model root matrix, or `NULL` if no model. |
+| `calcAndSetBaseMtx()` | Recompute and apply the base matrix from position/rotation/scale. |

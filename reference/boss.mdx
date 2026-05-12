@@ -1,0 +1,372 @@
+---
+title: "Boss actors: multi-phase battle systems"
+description: "The boss enemies with their complex multi-phase battle sequences, dedicated sequencer classes, sub-part actors, and state machine implementations."
+---
+
+Every boss in Super Mario Galaxy 1 is implemented as a cluster of cooperating classes: a main actor, one or more sub-part actors, a sequencer or battle director that controls phase progression, and a set of named state (nerve) execute functions that handle individual attack moves. The `Boss/` directory contains around 130 headers covering ten distinct boss encounters.
+
+<Note>
+  Boss sub-parts (arms, tails, shells, legs) are typically `LiveActor` or `PartsModel` instances owned by the main boss actor. They share sensor hit routing back to the boss through `attackSensor` and `receiveMsgPlayerAttack` delegation.
+</Note>
+
+## Common boss pattern
+
+```
+MainBossActor         — inherits LiveActor; owns all sub-parts and sequencer
+  ├── SequencerOrDirector — NerveExecutor subclass managing phase transitions
+  ├── SensorCtrl          — routes hit messages between sensors
+  ├── SubPartA            — arm / tail / shell / leg LiveActor or PartsModel
+  └── SubPartB            ...
+```
+
+The sequencer calls `setNerve()` on the main actor or sub-parts to advance the battle. Individual phases are implemented as `exePhase()` methods on the main actor that run each frame while that nerve is active.
+
+## Bosses
+
+<AccordionGroup>
+  <Accordion title="Koopa (Bowser) — KoopaBattleBase, Koopa, KoopaSequencer">
+    Bowser's encounters (Vs1, Vs2, Vs3) share a base class structure. The main `Koopa` actor delegates all sensor and message handling to `KoopaSensorCtrl` and reads phase timing from `KoopaSequencer`.
+
+    ```cpp
+    class Koopa : public LiveActor {
+    public:
+        Koopa(const char* pName, KoopaSequencer* pSequencer);
+
+        virtual void init(const JMapInfoIter&);
+        virtual void kill();
+        virtual void control();
+        virtual void calcAndSetBaseMtx();
+        virtual void updateHitSensor(HitSensor*);
+        virtual void attackSensor(HitSensor*, HitSensor*);
+        virtual bool receiveMsgPlayerAttack(u32, HitSensor*, HitSensor*);
+        virtual bool receiveMsgEnemyAttack(u32, HitSensor*, HitSensor*);
+        virtual bool receiveOtherMsg(u32, HitSensor*, HitSensor*);
+
+    private:
+        /* 0x98 */ KoopaSequencer* mSequencer;
+        /* 0x9C */ KoopaSensorCtrl* mSensorCtrl;
+        /* 0xA0 */ KoopaParts* mParts;
+        /* 0xA4 */ ActorJointCtrl* mJointCtrl;
+    };
+    ```
+
+    Supporting files: `KoopaFunction.hpp`, `KoopaSensorCtrl.hpp`, `KoopaFireStairs.hpp`, `KoopaPowerUpSwitch.hpp`, `KoopaDemoPowerUp.hpp`, `KoopaPlanetShadow.hpp`, `KoopaRestarterVs3.hpp`, `KoopaViewSwitchKeeper.hpp`.
+  </Accordion>
+
+  <Accordion title="DinoPackun (Dino Piranha) — multi-phase with sequencer">
+    Dino Piranha appears in two variants (`DinoPackunVs1`, `DinoPackunVs2`) and has a large support structure. The `DinoPackun` main actor owns its animated tail chain, an egg shell that cracks on first hit, and foot-print effects.
+
+    ```cpp
+    class DinoPackun : public LiveActor {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual void control();
+        virtual void attackSensor(HitSensor*, HitSensor*);
+        virtual bool receiveMsgPlayerAttack(u32, HitSensor*, HitSensor*);
+
+        void initTail();
+        void initEggShell();
+        void initBall();
+        void startSequence();
+        void updateNormalVelocity();
+        void updateRunVelocity();
+        void appearStarPiece(s32);
+        void adjustTailRootPosition(const TVec3f&, f32);
+
+        DinoPackunTail* mTail;            // 0x8C
+        DinoPackunBall* mBall;            // 0x90
+        FootPrint* mFootPrint;            // 0x94
+        DinoPackunEggShell* mShell;       // 0x98
+        DinoPackunDemoPosition* mDemoPos; // 0x9C
+        DinoPackunSequencer* mSequence;   // 0xB0
+    };
+    ```
+
+    Supporting files: `DinoPackunAction.hpp`, `DinoPackunBall.hpp`, `DinoPackunBattleEgg.hpp`, `DinoPackunBattleEggVs2.hpp`, `DinoPackunBattleVs1Lv1.hpp`, `DinoPackunBattleVs1Lv2.hpp`, `DinoPackunBattleVs2Lv1.hpp`, `DinoPackunDemo.hpp`, `DinoPackunFire.hpp`, `DinoPackunStateAwake.hpp`, `DinoPackunStateDamage.hpp`, `DinoPackunStateFire.hpp`, `DinoPackunTail.hpp`, `DinoPackunTailNode.hpp`, `DinoPackunTailPart.hpp`, `DinoPackunTailRoot.hpp`, `DinoPackunTrackFire.hpp`.
+  </Accordion>
+
+  <Accordion title="TombSpider — two-phase web boss">
+    TombSpider transitions from a cocoon phase into a two-phase spider battle. Phase state is delegated to `TombSpiderAction1st` and `TombSpiderAction2nd`. Acid glands and threader actors are sub-parts managed through `TombSpiderParts`.
+
+    ```cpp
+    class TombSpider : public LiveActor {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual void control();
+        virtual void attackSensor(HitSensor*, HitSensor*);
+        virtual bool receiveMsgPlayerAttack(u32, HitSensor*, HitSensor*);
+
+        void exeWaitPlayer();
+        void exeActionCocoon();
+        void exeDemoCocoonBreak();
+        void exeAction1st();
+        void exeDemoBattle1stEnd();
+        void exeDemoBattle2ndStart();
+        void exeAction2nd();
+        void exeDemoDeath();
+
+        /* 0x8C */ TombSpiderSensorCtrl* mSensorCtrl;
+        /* 0x90 */ TombSpiderParts* mParts;
+        /* 0x94 */ TombSpiderEnvironment* mEnvironment;
+        /* 0x98 */ TombSpiderActionCocoon* mActionCocoon;
+        /* 0x9C */ TombSpiderAction1st* mAction1st;
+        /* 0xA0 */ TombSpiderAction2nd* mAction2nd;
+        /* 0xA4 */ TombSpiderDemo* mDemo;
+        /* 0xA8 */ bool mNoctilucaActive;
+        /* 0xAC */ ActorCameraInfo* mCameraInfo;
+    };
+    ```
+
+    Supporting files: `TombSpiderAcid.hpp`, `TombSpiderAction1st.hpp`, `TombSpiderAction2nd.hpp`, `TombSpiderActionBase.hpp`, `TombSpiderActionCocoon.hpp`, `TombSpiderDemo.hpp`, `TombSpiderEnvironment.hpp`, `TombSpiderFunction.hpp`, `TombSpiderGland.hpp`, `TombSpiderParts.hpp`, `TombSpiderSensorCtrl.hpp`, `TombSpiderStateSwoon.hpp`, `TombSpiderThreadAttacher.hpp`, `TombSpiderVitalSpot.hpp`.
+  </Accordion>
+
+  <Accordion title="SkeletalFishBoss — aquatic multi-guard boss">
+    The giant skeletal fish cycles through swim, open-mouth, bite, and power-up phases. A separate `SkeletalFishBossBattleDirector` manages the guard fish and volcanic column hazards that accompany the fight.
+
+    ```cpp
+    class SkeletalFishBoss : public LiveActor {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual void calcAnim();
+        virtual void control();
+        virtual void calcAndSetBaseMtx();
+
+        void exeSwim();
+        void exeOpen();
+        void exeOpenWait();
+        void exeClose();
+        void exeBite();
+        void exeDamage();
+        void exeDown();
+        void exeDead();
+        void exeAppearDemo();
+        void exePowerUpDemo();
+
+        JointController* mControllers[0xD]; // 0x8C–0xBC
+        SkeletalFishBossHead* mBossHead;               // 0xC8
+        SkeletalFishRailControl* mRailControl;         // 0x108
+        SkeletalFishBossBattleDirector* mBossDirector; // 0x10C
+        SkeletalFishBossInfo* mBossInfo;               // 0x1A8
+        SkeletalFishGuardHolder* mGuardHolder;         // 0x1AC
+    };
+
+    class SkeletalFishBossBattleDirector : public NameObj {
+    public:
+        virtual void movement();
+
+        void killGuard();
+        void appearBirdLouse();
+        void startPowerUpDemo1();
+        void startPowerUpDemo2();
+
+        SkeletalFishBoss* mFishBoss;               // 0xC
+        SubmarineVolcanoBigColumn* mColumns[0x20]; // 0x10
+        ModelObj* mGuardModels[4];                 // 0xD8
+    };
+    ```
+
+    Supporting files: `SkeletalFishBaby.hpp`, `SkeletalFishBabyRail.hpp`, `SkeletalFishBabyRailHolder.hpp`, `SkeletalFishBossFunc.hpp`, `SkeletalFishBossInfo.hpp`, `SkeletalFishBossRail.hpp`, `SkeletalFishBossRailHolder.hpp`, `SkeletalFishGuard.hpp`, `SkeletalFishGuardHolder.hpp`, `SkeletalFishJointCalc.hpp`, `SkeletalFishRailControl.hpp`.
+  </Accordion>
+
+  <Accordion title="TripodBoss (Megaleg) — walking mech with IK legs">
+    The tripod boss uses inverse kinematics to plant three legs. Its body matrix is computed each frame from `TripodBossBone` entries. Step sequencing is driven by `TripodBossStepSequence`.
+
+    ```cpp
+    class TripodBoss : public LiveActor {
+    public:
+        enum PART_ID { LeftLeg = 0, MiddleLeg = 1, RightLeg = 2 };
+
+        virtual void init(const JMapInfoIter&);
+        virtual void control();
+        virtual void calcAndSetBaseMtx();
+
+        void exeWait();
+        void exeStep();
+        void exeWaitStep();
+        void exeChangeSequence();
+        void exeDamage();
+        void exeStartDemo();
+        void exeDamageDemo();
+        void exeBreakDownDemo();
+        void exeExplosionDemo();
+
+        bool tryDamage();
+        bool tryBreak();
+        bool isStopAllLeg() const;
+        bool isBroken() const;
+
+        TPos3f mBodyMtx;                        // 0x8C
+        TripodBossBone mBossBones[0x16];        // 0x120
+        TripodBossLeg* mLegs[3];                // 0x598
+        TripodBossStepPoint* mStepPoints[3];    // 0x5A4
+        TripodBossMovableArea* mMovableArea;    // 0x5B0
+        TripodBossStepSequence* mStepSequence;  // 0x5B4
+        s32 mCurrentStepSeq;                    // 0x624
+        s32 mNextStepSeq;                       // 0x628
+        ActorCameraInfo* mEventCamera;          // 0x644
+    };
+    ```
+
+    Supporting files: `TripodBossAccesser.hpp`, `TripodBossBaseJointPosition.hpp`, `TripodBossBreakMovement.hpp`, `TripodBossCoin.hpp`, `TripodBossCore.hpp`, `TripodBossFixParts.hpp`, `TripodBossFixPartsBase.hpp`, `TripodBossGuardWall.hpp`, `TripodBossGuardWallPart.hpp`, `TripodBossKillerGeneraterCircle.hpp`, `TripodBossKillerGenerator.hpp`, `TripodBossKinokoOneUp.hpp`, `TripodBossLeg.hpp`, `TripodBossRailMoveParts.hpp`, `TripodBossRotateParts.hpp`, `TripodBossShell.hpp`, `TripodBossStepPoint.hpp`, `TripodBossStepSequence.hpp`, `TripodBossStepStartArea.hpp`.
+  </Accordion>
+
+  <Accordion title="BossBegoman (King Kaliente) — rolling boss with followers">
+    `BossBegoman` extends `BegomanBase` (a general topman base class) and adds follower management, a parabolic path, and a `BossBegomanHead` sub-part. It spawns `BegomanBaby` and `BegomanSpike` follower actors during the fight.
+
+    ```cpp
+    class BossBegoman : public BegomanBase {
+    public:
+        enum FollowerKind {
+            FollowerKind_BabyFollower  = 0,
+            FollowerKind_SpikeFollower = 1,
+            FollowerKind_BothFollower  = 2,
+        };
+
+        virtual void init(const JMapInfoIter&);
+        virtual bool receiveMsgPlayerAttack(u32, HitSensor*, HitSensor*);
+
+        void exeWait();
+        void exeSignAttack();
+        void exePursue();
+        void exeTurn();
+        void exeOnWeak();
+        void exeElectricDeath();
+        void exeJumpToInitPos();
+        void tryLaunchFollower();
+        void killAllFollower(FollowerKind);
+        bool isDeadAllFollower();
+
+        /* 0x100 */ BegomanBaby** mBabyFollowers;
+        /* 0x104 */ BegomanBase** mSpikeFollowers;
+        /* 0x108 */ s32 mBabyFollowerNum;
+        /* 0x10C */ s32 mSpikeFollowerNum;
+        /* 0x110 */ FollowerKind mFollowerKind;
+        /* 0x114 */ ParabolicPath* mPath;
+        /* 0x118 */ BossBegomanHead* mHead;
+        /* 0x14C */ s32 mHealth;
+        /* 0x154 */ ActorCameraInfo* mOpeningDemoInfo;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="BossKameck (Kamella) — magic barrier boss with sequencer">
+    `BossKameck` fields a set of Kameck minions via `KameckHolder` and fires beams through a beam event listener. `BossKameckSequencer` (a `NerveExecutor`) drives which phase the battle is in.
+
+    ```cpp
+    class BossKameck : public LiveActor {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual void control();
+        virtual void attackSensor(HitSensor*, HitSensor*);
+        virtual bool receiveMsgPlayerAttack(u32, HitSensor*, HitSensor*);
+
+        void startSequence();
+        void appearKameck();
+        void deadKameck();
+        s32 getLivingKameckNum() const;
+        void hitBeam(s32);
+        void killAllBeam();
+
+        BossKameckSequencer* mSequencer;  // 0xAC
+        KameckHolder* mKameckHolder;      // 0xB0
+        ActorJointCtrl* mJointCtrl;       // 0xB4
+        ActiveActorList* mActorList;      // 0xB8
+        BossKameckMoveRail** mMoveRail;   // 0xC0
+    };
+
+    class BossKameckSequencer : public NerveExecutor {
+    public:
+        virtual void init(BossKameck*, const JMapInfoIter&);
+        virtual void update();
+        virtual void attackSensor(HitSensor*, HitSensor*);
+        virtual bool receiveMsgPlayerAttack(u32, HitSensor*, HitSensor*);
+
+        BossKameck* mBossKameck;            // 0x8
+        BossKameckBattleDemo* mBattleDemo;  // 0x10
+    };
+    ```
+
+    Supporting files: `BossKameckAction.hpp`, `BossKameckBarrier.hpp`, `BossKameckBattleDemo.hpp`, `BossKameckBattlePattarn.hpp`, `BossKameckMoveRail.hpp`, `BossKameckStateBattle.hpp`, `BossKameckVs1.hpp`, `BossKameckVs2.hpp`.
+  </Accordion>
+
+  <Accordion title="Polta — arm-swinging rock boss">
+    Polta holds two `PoltaArm` sub-actors. It has a dedicated `PoltaActionSequencer` and five attack states: ground punch, rock generation, ground-rock attack, punch, and stagger.
+
+    ```cpp
+    class Polta : public LiveActor {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual void control();
+        virtual void attackSensor(HitSensor*, HitSensor*);
+        virtual bool receiveMsgPlayerAttack(u32, HitSensor*, HitSensor*);
+
+        void rotateToPlayer();
+        void updateAction();
+        void updatePose(f32, f32);
+
+        /* 0x8C */ PoltaSensorCtrl* mSensorCtrl;
+        /* 0x90 */ PoltaArm* mLeftArm;
+        /* 0x94 */ PoltaArm* mRightArm;
+        /* 0x9C */ PoltaActionSequencer* mSequencer;
+        /* 0xA0 */ PoltaRockHolder* mRockHolder;
+        /* 0xA4 */ PoltaGroundRockHolder* mGroundRockHolder;
+        /* 0xA8 */ ActorCameraInfo* mCameraInfo;
+    };
+    ```
+
+    Attack states: `PoltaStateAttackGround`, `PoltaStateGenerateRock`, `PoltaStateGroundRockAttack`, `PoltaStatePunch`, `PoltaStateStagger`. Projectile files: `PoltaRock.hpp`, `PoltaGroundRock.hpp`, `PoltaGroundRockHolder.hpp`, `PoltaRockHolder.hpp`.
+  </Accordion>
+
+  <Accordion title="Dodoryu (Fiery Dino Piranha variant) — burrowing worm boss">
+    Dodoryu burrows underground and surfaces in different positions. Its move behavior is delegated to `DodoryuStateBase` subclasses. Hill animations (the dirt mound before surfacing) are managed internally.
+
+    ```cpp
+    class Dodoryu : public LiveActor {
+    public:
+        void shiftMoveStateChase(f32, f32, f32, f32);
+        void shiftMoveStateJumpOut(f32, f32);
+        void shiftMoveStateEscape(f32, s32, s32, f32, f32);
+        void shiftMoveStateNull();
+        void startHill();
+        void stopHill();
+        void killLeadHill();
+        void snapToGround();
+        void nextState();
+
+        /* 0x8C */ TPos3f mBaseMtx;
+    };
+
+    struct DodoryuAnimSet {
+        const char* mBck;
+        const char* mBtk;
+        const char* mBrk;
+        const char* mBva;
+        const char* mLeadHillBck;
+    };
+    ```
+
+    Supporting files: `DodoryuStateBase.hpp`, `DodoryuStateLv2.hpp`.
+  </Accordion>
+
+  <Accordion title="OtaKing (Bouldergeist) — magma hand boss">
+    `OtaKing` inherits `NameObj` rather than `LiveActor`. Its internal structure (hands, magma pool, long-foot sub-actor) is mostly opaque in the current decompilation state — the class body is padded to match the binary layout. Supporting files include `BossStinkBug` and its many action/demo helpers, which are related encounters.
+
+    ```cpp
+    class OtaKing : public NameObj {
+    public:
+        OtaKing(const char*);
+        virtual ~OtaKing();
+        static void makeArchiveList(NameObjArchiveListCollector*, const JMapInfoIter&);
+
+    private:
+        u8 mPad[(0x158) - sizeof(NameObj)];
+    };
+    ```
+
+    The `BossStinkBug` (Tarantox) cluster lives alongside in `Boss/`: `BossStinkBug.hpp`, `BossStinkBugActionBase.hpp`, `BossStinkBugActionFlyHigh.hpp`, `BossStinkBugActionFlyLow.hpp`, `BossStinkBugActionGround.hpp`, `BossStinkBugActionSequencer.hpp`, `BossStinkBugBomb.hpp`, `BossStinkBugBombHolder.hpp`, and associated demo files.
+  </Accordion>
+</AccordionGroup>
+
+<Tip>
+  When tracing a boss hit reaction, follow the call from `receiveMsgPlayerAttack` on the main actor through the `SensorCtrl` delegate and into the sequencer's nerve change. The pattern is consistent across all bosses: receive → validate hit position → notify sequencer → set new nerve.
+</Tip>

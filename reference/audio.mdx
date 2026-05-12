@@ -1,0 +1,286 @@
+---
+title: "Audio system: BGM, SE, and scene audio"
+description: "Petari's audio architecture covering AudSystem, the BGM subsystem, sound-effect objects, scene resource management, and rhythm-based audio."
+---
+
+The audio system in Super Mario Galaxy is layered. At the bottom sits `AudSystem`, which extends the JSystem `JAUSoundMgr` and owns the hardware audio context. Above that, specialised managers handle background music (`AudBgmMgr`), sound effects (`AudSoundObjHolder`), scene-scoped resource loading (`AudSceneMgr`), and rhythm-driven music logic (`AudRemixMgr`). Actor code interacts with `AudSoundObject` instances to trigger positional sound effects, and designer-authored BCSV tables drive most BGM sequencing automatically.
+
+## AudSystem
+
+`AudSystem` is the top-level audio singleton. It extends `JAUSoundMgr` and directly owns references to every other audio subsystem manager.
+
+```cpp
+class AudSystem : public JAUSoundMgr {
+public:
+    AudSystem(JAUSectionHeap*, JKRArchive*, JKRArchive*, JKRArchive*);
+
+    void frameWork();
+    void calc();
+
+    bool startSound(JAISoundID, JAISoundHandle*, const TVec3f*);
+    bool startLevelSound(JAISoundID, JAISoundHandle*, const TVec3f*);
+
+    void pause();
+    void unpause();
+    void resetAudio(u32, bool);
+
+    void enterPauseMenu();
+    void exitPauseMenu();
+    void enterHomeButtonMenu();
+    void exitHomeButtonMenu();
+
+    bool isEnableStartSound(JAISoundID);
+    s32  getNumOfPlaying(JAISoundID);
+    void setMicMtx(MtxPtr, s32 micIndex);
+    const TVec3f& getMicPos(s32 micIndex);
+    void setFarCamera(bool);
+
+    static AudSystem* msBasic;  // global singleton pointer
+
+    /* 0x09EC */ AudSoundObject*        mSystemSeObject;
+    /* 0x09F0 */ AudSoundObject*        mAtmosphereSeObject;
+    /* 0x09F8 */ AudSceneMgr*           mSceneMgr;
+    /* 0x09FC */ AudBgmMgr              mBgmMgr;
+    /* 0x12FC */ AudSoundObjHolder*     mSoundObjHolder;
+    /* 0x1304 */ AudRhythmMeSystem*     mRhythmMeSystem;
+    /* 0x1308 */ AudRemixMgr*           mRemixMgr;
+    /* 0x130C */ AudEffector*           mAudEffector;
+    /* 0x1310 */ AudSeStrategyMgr*      mSeStrategyMgr;
+};
+```
+
+## BGM subsystem
+
+The BGM subsystem is a three-class hierarchy: `AudBgm` defines the abstract BGM contract, `AudBgmKeeper` pools concrete instances, and `AudBgmMgr` provides the public API used by the rest of the game.
+
+### AudBgm
+
+`AudBgm` is the abstract base for all background music players. Two concrete variants exist: `AudSingleBgm` for standard single-stream music and `AudMultiBgm` for synchronised multi-stream arrangements.
+
+```cpp
+class AudBgm {
+public:
+    virtual void init() = 0;
+    virtual void start(u32 soundId, bool prepareOnly) = 0;
+    virtual void stop(u32 fadeFrames) = 0;
+    virtual bool isPreparedPlay() = 0;
+    virtual void playAfterPrepared() = 0;
+    virtual void movement() = 0;
+    virtual void moveVolume(f32 target, u32 frames) = 0;
+    virtual void changeTrackMuteState(s32 track, s32 state) = 0;
+    virtual u32* getHandle() = 0;
+    virtual bool isSoundAttached() const = 0;
+    virtual void pause(bool) = 0;
+    virtual bool isStopping() const = 0;
+    virtual bool isPaused() const = 0;
+    virtual JAISoundID getSoundID() const = 0;
+    virtual AudBgmRhythmStrategy* getRhythmStrategy();
+    virtual void sendToSyncStream() = 0;
+    virtual void rejectFromSyncStream() = 0;
+
+    /* 0x08 */ AudBgmRhythmStrategy mRhythmStrategy;
+};
+```
+
+`AudSingleBgm` adds an array of 16 `AudTrackController` entries for per-track mute and volume management. `AudMultiBgm` adds the same array plus two `AudFader` objects and stream synchronisation logic.
+
+### AudBgmKeeper
+
+`AudBgmKeeper` pools two `AudSingleBgm` and two `AudMultiBgm` instances so the BGM manager can switch between them without allocation.
+
+```cpp
+class AudBgmKeeper {
+public:
+    AudBgmKeeper();
+
+    AudBgm*        get(BgmType);
+    void           release(AudBgm*);
+    AudSingleBgm*  getValidSingleBgm();
+    AudMultiBgm*   getValidMultiBgm();
+
+    /* 0x000 */ AudSingleBgm mSingleBgm[2];
+    /* 0x3B8 */ AudMultiBgm  mMultiBgm[2];
+};
+```
+
+### AudBgmMgr
+
+`AudBgmMgr` is the public BGM interface. It maintains the active BGM state, supports queuing a next BGM, and integrates with the rhythm subsystem.
+
+```cpp
+class AudBgmMgr {
+public:
+    AudBgmMgr();
+
+    void movement();
+    bool start(s32 channel, u32 soundId, bool prepareOnly);
+    void setNextBGM(s32 channel, u32 soundId);
+    void clearNextBGM(s32 channel);
+    bool startLastBGM(s32 channel);
+    void pause();
+    void unpause();
+    void volDownLevel(bool immediately);
+
+    // Rhythm integration
+    bool sendToRhythmSystem(s32 channel);
+    void setBgmToRhythmDominant(s32 channel);
+    void stopRhythmProcess(s32 channel);
+
+    /* 0x000 */ AudBgm*                  _0[2];           // active BGM slots
+    /* 0x020 */ AudBgmKeeper             mKeeper;
+    /* 0x7DC */ AudBgmVolumeController   mVolumeController[2];
+};
+```
+
+## Sound effect subsystem
+
+### AudSoundObject
+
+`AudSoundObject` is the positional sound emitter attached to actors. It extends `JAUSoundObject` (the JSystem 3D audio source) and adds game-specific map-code tagging, version conversion, and limited-voice management.
+
+```cpp
+class AudSoundObject : public JAUSoundObject, JKRDisposer {
+public:
+    AudSoundObject(TVec3f* position, u8 flags, JKRHeap*);
+    virtual ~AudSoundObject();
+
+    virtual JAISoundHandle* startSound(JAISoundID);
+    virtual JAISoundHandle* startLevelSound(JAISoundID);
+
+    void addToSoundObjHolder();
+    void setTrans(TVec3f* position);
+    void writePort(JAISoundHandle*, u32 port, u16 value);
+    void startSoundParam(JAISoundID, s32 param1, s32 param2);
+    void startLevelSoundParam(JAISoundID, s32 param1, s32 param2);
+    void setMapCode(s32);
+    void clearMapCode();
+    void limitVoiceOne(JAISoundID);
+    void stopCategorySound(u32 category, u32 fadeFrames);
+
+    void* mHashDatas;  // 0x3C, sound ID hash table
+    JKRHeap* mHeap;    // 0x40
+};
+```
+
+### AudSoundObjHolder
+
+`AudSoundObjHolder` maintains the list of all live `AudSoundObject` instances. `AudSystem` calls `update()` on it each frame to cull sounds whose objects have been destroyed.
+
+```cpp
+class AudSoundObjHolder {
+public:
+    AudSoundObjHolder(JKRHeap*, s32 capacity);
+
+    void update();
+    void add(AudSoundObject*);
+    void remove(AudSoundObject*);
+
+    /* 0x00 */ AudSoundObject** mArray;    // registered sound objects
+    /* 0x04 */ s32              mCapacity;
+    /* 0x08 */ s32              mSize;     // number currently registered
+};
+```
+
+## Scene-level resource management
+
+### AudSceneMgr
+
+`AudSceneMgr` handles staged loading of audio wave-set archives. It distinguishes between static resources (loaded once), stage resources (loaded per galaxy), and scenario resources (loaded per star mission).
+
+```cpp
+class AudSceneMgr {
+public:
+    AudSceneMgr(JAUSectionHeap*);
+
+    void loadStaticResource();
+    bool isLoadDoneStaticResource();
+
+    void loadStageResource(const char* galaxyName, const char* stageName);
+    bool isLoadDoneStageResource();
+
+    void loadScenarioResource(const char* galaxyName,
+                              const char* stageName,
+                              s32 scenarioNo);
+    bool isLoadDoneScenarioResource();
+
+    void startScene();
+    void eraseLastBgmWaveSet();
+    void eraseLastSeWaveSet();
+
+    void setPlayerModeMario();
+    void setPlayerModeLuigi();
+    void loadPlayerResource();
+    bool isPlayerResourceLoaded();
+
+    /* 0x00 */ JAUSectionHeap* _0;
+    /* 0x14 */ u32 mPlayerMode;  // 0 = Mario, 1 = Luigi
+};
+```
+
+## Rhythm-based audio
+
+### AudBgmRhythmStrategy
+
+`AudBgmRhythmStrategy` is embedded in every `AudBgm`. It marks one BGM as the rhythm *dominant*, meaning its beat data drives the rhythm system even when another BGM is playing simultaneously.
+
+```cpp
+class AudBgmRhythmStrategy {
+public:
+    AudBgmRhythmStrategy();
+
+    virtual void set(AudBgm*, s32);
+
+    void reject();
+    void setDominant();
+    bool isDominant() const;
+
+    /* 0x04 */ s32    _4;
+    /* 0x08 */ AudBgm* _8;  // back-pointer to owning AudBgm
+};
+```
+
+### AudRemixMgr
+
+`AudRemixMgr` manages the remix sequencer used for musical variation. It holds a table of `RemixNoteGroupData` entries keyed by melody index and drives an `AudRemixSequencer` each frame.
+
+```cpp
+struct RemixNoteGroupData {
+    s32          mIndex;
+    s32          mTrackCount;
+    u32          mNoteCount;
+    RemixTrack*  mRemixTracks;
+};
+
+class AudRemixMgr {
+public:
+    AudRemixMgr(JKRHeap*);
+
+    void init();
+    void update();
+    void setRemixSeqResource(void* ptr);
+    RemixNoteGroupData* getRemixNoteGroupDataFromMelodyNo(s32 melodyNo) const;
+
+    /* 0x0  */ JKRHeap*            mHeap;
+    /* 0x4  */ RemixNoteGroupData* mGroups;
+    /* 0x8  */ s32                 mGroupCount;
+    /* 0xC  */ AudSoundObject*     mSoundObj;
+    /* 0x10 */ AudRemixSequencer*  mRemixSeq;
+};
+```
+
+## Subsystem overview
+
+<CardGroup cols={2}>
+  <Card title="AudBgmMgr" icon="music">
+    Public BGM API. Starts, stops, queues, fades, and pauses background music. Integrates with the rhythm system through `AudBgmRhythmStrategy`.
+  </Card>
+  <Card title="AudSceneMgr" icon="folder-open">
+    Staged wave-set loader. Separates static, per-stage, and per-scenario audio archives so only the needed data is resident at any time.
+  </Card>
+  <Card title="AudSoundObject" icon="volume-high">
+    Per-actor positional SE emitter. Wraps `JAUSoundObject` and adds game-specific map-code tagging, voice limiting, and SE version conversion.
+  </Card>
+  <Card title="AudRemixMgr" icon="sliders">
+    Rhythm and remix sequencer driver. Reads note-group data from loaded resources and feeds the `AudRemixSequencer` each frame.
+  </Card>
+</CardGroup>

@@ -1,0 +1,204 @@
+---
+title: "Particle and visual effects system"
+description: "Petari's particle effect system: EffectSystem, ParticleEmitter, MultiEmitter, SingleEmitter, and automatic effect group management."
+---
+
+Visual effects in Super Mario Galaxy are driven by Nintendo's JPA (J Particle) particle system, surfaced through a game-level abstraction layer. `EffectSystem` owns the JPA emitter manager and distributes creation, update, and draw responsibilities to dedicated executor objects. Actor code never calls JPA directly — instead it works through `MultiEmitter` for grouped effects or `SingleEmitter` for one-shot bursts. The `AutoEffectGroup` system automatically attaches named effect sets to actors from BCSV data, so designers can add particle effects to any object without requiring a code change.
+
+## EffectSystem
+
+`EffectSystem` is the central manager. It is a `NameObj` singleton retrieved via `MR::getEffectSystem()`.
+
+```cpp
+class EffectSystem : public NameObj {
+public:
+    EffectSystem(const char*, bool);
+
+    virtual void init(const JMapInfoIter& rIter);
+
+    // Create a new emitter from a resource ID.
+    ParticleEmitter* createEmitter(u16 resourceId, u8 groupId, u8 drawOrder);
+
+    // Immediately release an emitter or single-emitter.
+    void forceDeleteEmitter(ParticleEmitter*) const;
+    void forceDeleteSingleEmitter(SingleEmitter*) const;
+
+    // Create a single-emitter and register optional callbacks.
+    void createSingleEmitter(SingleEmitter*,
+                             MultiEmitterCallBackBase*,
+                             MultiEmitterParticleCallBack*);
+
+    /* 0x0C */ JPAEmitterManager*    mEmitterManager; // JPA emitter pool
+    /* 0x10 */ ParticleEmitterHolder* mEmitterHolder;  // game-side tracker
+    /* 0x14 */ ParticleDrawExecutor* mDrawExec;
+    /* 0x18 */ ParticleCalcExecutor* mCalcExec;
+    /* 0x1C */ AutoEffectGroupHolder* mGroupHolder;
+};
+```
+
+## ParticleEmitter
+
+`ParticleEmitter` is a thin wrapper around `JPABaseEmitter`. It adds pause/stop state tracking and convenience setters for colour and transform.
+
+```cpp
+class ParticleEmitter {
+public:
+    ParticleEmitter();
+
+    void invalidate();
+    void init(u16 resourceId);
+    void pauseOn();
+    void pauseOff();
+    bool isValid() const;
+    bool isContinuousParticle() const;
+
+    void setGlobalRotation(const TVec3s&);
+    void setGlobalScale(const TVec3f&);
+    void setGlobalSRTMatrix(const MtxPtr);
+    void setGlobalPrmColor(u8 r, u8 g, u8 b);
+    void setGlobalEnvColor(u8 r, u8 g, u8 b);
+
+    /* 0x0 */ JPABaseEmitter* mEmitter;
+    /* 0x4 */ bool            mPaused;
+    /* 0x5 */ bool            mStopped;
+};
+```
+
+## ParticleEmitterHolder
+
+`ParticleEmitterHolder` owns the fixed-size pool of `ParticleEmitter` slots used by `EffectSystem`. It tracks how many slots are in use and which `EffectSystem` instance manages them.
+
+```cpp
+class ParticleEmitterHolder {
+public:
+    ParticleEmitterHolder(EffectSystem const*, int capacity);
+
+    EffectSystem const*              mEffectSystem;
+    MR::AssignableArray<ParticleEmitter> mEmitters;
+    int                              mNumEmitters;
+};
+```
+
+## MultiEmitter
+
+`MultiEmitter` represents a named group of one or more `ParticleEmitter` slots that logically belong together (for example, a flame effect with a core emitter and a heat-shimmer emitter). Actor code interacts with `MultiEmitter` rather than with raw `ParticleEmitter` instances.
+
+```cpp
+class MultiEmitter {
+public:
+    // Lifecycle
+    void create(EffectSystem*);
+    void forceDelete(EffectSystem*);
+    void deleteEmitter();
+
+    // Transform control
+    void setHostMtx(MtxPtr);
+    void setHostSRT(const TVec3f* scale,
+                    const TVec3f* rotate,
+                    const TVec3f* translate);
+    void setGlobalSRTMatrix(const MtxPtr, s32 emitterIndex);
+    void setGlobalTranslation(const TVec3f&, s32 emitterIndex);
+
+    // Per-emitter parameter overrides
+    void setBaseScale(f32);
+    void setLocalScale(const TVec3f&, s32 emitterIndex);
+    void setGlobalScale(f32, s32 emitterIndex);
+    void setGlobalRotationDegree(const TVec3f&, s32 emitterIndex);
+    void setRate(f32, s32 emitterIndex);
+    void setDrawOrder(s32);
+    void setGlobalPrmColor(u8 r, u8 g, u8 b, s32 emitterIndex);
+    void setGlobalEnvColor(u8 r, u8 g, u8 b, s32 emitterIndex);
+
+    // Callback / particle callback wiring
+    void createEmitterWithCallBack(MultiEmitterCallBackBase*);
+    void setParticleCallBackPtr(JPAParticleCallBack*, s32 emitterIndex);
+
+    // Query
+    ParticleEmitter* getParticleEmitter(s32 emitterIndex) const;
+    bool isValid() const;
+
+    // Clipping integration
+    void onCreateSyncClipping();
+    void onForceDeleteSyncClipping();
+};
+```
+
+<Tip>
+Pass `s32 emitterIndex = -1` to methods that accept an emitter index when you want the operation applied to all emitters in the group simultaneously.
+</Tip>
+
+## SingleEmitter
+
+`SingleEmitter` wraps a `ParticleEmitter` for one-shot or continuous spawning. Its `mSpawn` field determines whether the emitter fires once (`SINGLE_EMITTER_ONE_TIME_SPAWN`) or loops (`SINGLE_EMITTER_CONTINUOUS_SPAWN`).
+
+```cpp
+enum SingleEmitterSpawn {
+    SINGLE_EMITTER_ONE_TIME_SPAWN,
+    SINGLE_EMITTER_CONTINUOUS_SPAWN,
+    SINGLE_EMITTER_UNDEF_SPAWN
+};
+
+class SingleEmitter {
+public:
+    SingleEmitter();
+
+    void init(u16 resourceId);
+    void deleteEmitter();
+    void scanParticleEmitter(EffectSystem*);
+
+    bool isOneTime() const;
+    bool isValid() const;
+
+    void link(ParticleEmitter*);
+    void unlink();
+
+    /* 0x0 */ ParticleEmitter* mEmitter;
+    /* 0x4 */ u16              _4;
+    /* 0x6 */ u8               mGroupId;
+    /* 0x7 */ s8               mSpawn;   // SingleEmitterSpawn value
+};
+```
+
+## AutoEffectGroup
+
+`AutoEffectGroup` is the mechanism by which designers attach particle effects to any `LiveActor` through BCSV data without writing actor-specific code. `MR::Effect::registerAutoEffectInfoGroup` reads an `AutoEffectInfo` table from the actor's effect list archive and creates one `MultiEmitter` per entry inside the actor's `EffectKeeper`.
+
+Key utility functions (from `EffectSystemUtil.hpp`):
+
+```cpp
+namespace MR::Effect {
+    // Register all auto-effects defined for actorName in the effect list.
+    void registerAutoEffectInfoGroup(EffectKeeper*, const LiveActor*,
+                                     const char* actorName);
+
+    // Add a single AutoEffectInfo entry to an EffectKeeper.
+    void addAutoEffect(EffectKeeper*, const LiveActor*,
+                       const AutoEffectInfo*);
+
+    // Build a MultiEmitter for an AutoEffectInfo and bind it to the model.
+    void setupMultiEmitter(EffectKeeper*, const ModelManager*,
+                           const AutoEffectInfo*);
+
+    // Same as above, but also synchronise the effect to a BCK animation frame.
+    void setupMultiEmitterSyncBck(EffectKeeper*, const ModelManager*,
+                                  const AutoEffectInfo*);
+
+    // Check whether an effect name exists in the loaded resource.
+    bool isExistInResource(u16* outId, const char* effectName);
+}
+```
+
+<Note>
+`EffectKeeper` (declared in `LiveActor/EffectKeeper.hpp`) stores the `MultiEmitter` array that belongs to one `LiveActor`. It is distinct from `ParticleEmitterHolder`, which is a lower-level pool inside `EffectSystem`.
+</Note>
+
+## Effect draw order
+
+Effects are drawn in two passes managed by `EffectSystem`:
+
+| Executor | Purpose |
+|---|---|
+| `ParticleCalcExecutor` | Updates emitter positions, velocities, and particle lifetimes each frame |
+| `ParticleDrawExecutor` | Renders particles into the 3D scene or 2D overlay based on each emitter's draw mode |
+
+`MR::Effect::drawEffect3D` renders world-space particles using the provided zone transform. `MR::Effect::drawEffect2D` renders screen-space particles independently of the 3D projection.

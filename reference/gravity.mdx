@@ -1,0 +1,249 @@
+---
+title: "Gravity system: multi-directional physics"
+description: "How Super Mario Galaxy's gravity system supports multiple simultaneous gravity sources with per-actor priority resolution and custom field shapes."
+---
+
+Super Mario Galaxy's defining mechanic — walking on the outside of spherical planets, inside bowls, and along wires — is driven by a gravity subsystem that can blend contributions from any number of overlapping `PlanetGravity` instances at once. Every frame, `PlanetGravityManager::calcTotalGravityVector` iterates all registered sources, discards ones that do not cover the querying position, and accumulates a final gravity vector returned to the actor. Because each source carries a priority value, the manager can also report *which* source dominated, letting actors adjust their orientation, shadow projection, and magnet behaviour accordingly.
+
+## Base class
+
+```cpp
+class PlanetGravity {
+public:
+    PlanetGravity();
+
+    virtual void updateMtx(const TPos3f& rMtx) {}
+    virtual bool calcOwnGravityVector(TVec3f* pDest, f32* pScalar,
+                                      const TVec3f& rPosition) const { return false; }
+
+    bool calcGravity(TVec3f* pDest, const TVec3f& rPosition) const;
+    bool calcGravityFromMassPosition(TVec3f* pDirection, f32* pScalar,
+                                     const TVec3f& rPosition,
+                                     const TVec3f& rMassPosition) const;
+
+    f32  mRange;         // effective range
+    f32  mDistant;       // distance scalar
+    s32  mPriority;      // higher = queried first
+    u32  mGravityType;   // bitmask: NORMAL / SHADOW / MAGNET / MARIO_LAUNCHER
+    s32  mGravityPower;  // LIGHT / NORMAL / HEAVY
+    bool mActivated;
+    bool mIsInverse;     // flip direction
+    bool mIsRegistered;  // managed by PlanetGravityManager
+};
+```
+
+`PlanetGravity` is never instantiated directly. All concrete gravity types inherit from it and implement `calcOwnGravityVector`.
+
+## Gravity types
+
+<AccordionGroup>
+  <Accordion title="PlanetGravity (base) — virtual gravity field">
+    The abstract base class for all gravity sources. Stores shared fields such as `mRange`, `mPriority`, `mGravityType`, and `mIsInverse`. Subclasses override `calcOwnGravityVector` to describe the field geometry.
+  </Accordion>
+
+  <Accordion title="ParallelGravity — directional / planar gravity">
+    Produces a uniform directional field aligned to a configurable plane normal. Covers three range shapes: sphere, box, or cylinder. This is what large flat platforms and level-gravity areas use.
+
+    ```cpp
+    class ParallelGravity : public PlanetGravity {
+    public:
+        enum RANGE_TYPE {
+            RangeType_Sphere   = 0,
+            RangeType_Box      = 1,
+            RangeType_Cylinder = 2
+        };
+        enum DISTANCE_CALC_TYPE {
+            DistanceCalcType_Default = -1,
+            DistanceCalcType_X = 0,
+            DistanceCalcType_Y = 1,
+            DistanceCalcType_Z = 2
+        };
+
+        virtual void updateMtx(const TPos3f& rMtx);
+        virtual bool calcOwnGravityVector(TVec3f* pDest, f32* pScalar,
+                                          const TVec3f& rPosition) const;
+
+        TVec3f mPlaneUpVec;           // local up direction
+        TVec3f mWorldPlaneUpVec;      // world-space up direction
+        RANGE_TYPE         mRangeType;
+        DISTANCE_CALC_TYPE mDistanceCalcType;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="PointGravity — single-point attraction">
+    Pulls actors toward a single world-space point. Used for small celestial bodies and any scenario where gravity should converge on one location.
+
+    ```cpp
+    class PointGravity : public PlanetGravity {
+    public:
+        virtual void updateMtx(const TPos3f& rMtx);
+        virtual bool calcOwnGravityVector(TVec3f* pDest, f32* pScalar,
+                                          const TVec3f& rPosition) const;
+
+        TVec3f mOrigPosition;  // local origin
+        TVec3f mTranslation;   // world-space centre
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="SegmentGravity — cylindrical / capsule gravity">
+    Defines a segment between two points. Actors are pulled toward the nearest point on the segment axis, producing a cylindrical gravity field with optional hemispherical caps at each end.
+
+    ```cpp
+    class SegmentGravity : public PlanetGravity {
+    public:
+        virtual void updateMtx(const TPos3f& rMtx);
+        virtual bool calcOwnGravityVector(TVec3f* pDest, f32* pScalar,
+                                          const TVec3f& rPosition) const;
+
+        TVec3f mGravityPoints[2];       // segment endpoints (local)
+        TVec3f mWorldGravityPoints[2];  // segment endpoints (world)
+        TVec3f mAxis;                   // normalised axis
+        f32    mAxisLength;
+        f32    mValidSideDegree;        // cone-of-influence half-angle
+        bool   mEdges[2];               // whether each cap is active
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="DiskGravity — flat disc field">
+    Attracts actors toward the surface of a circular disc. The disc has a configurable radius, a normal direction, and an optional edge-gravity band for actors beyond the rim.
+
+    ```cpp
+    class DiskGravity : public PlanetGravity {
+    public:
+        virtual void updateMtx(const TPos3f& rMtx);
+        virtual bool calcOwnGravityVector(TVec3f* pDest, f32* pScalar,
+                                          const TVec3f& rPosition) const;
+
+        TVec3f mLocalNormal;     // disc face normal (local)
+        TVec3f mWorldNormal;     // disc face normal (world)
+        f32    mLocalRadius;
+        f32    mWorldRadius;
+        f32    mValidDegree;     // angular coverage of the field
+        bool   mEnableBothSide;  // attract from both faces
+        bool   mEnableEdgeGravity;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="DiskTorusGravity — torus / ring gravity">
+    Like `DiskGravity`, but hollowed out into a torus. Actors are attracted toward the nearest point on the ring centerline rather than toward a flat surface centre.
+
+    ```cpp
+    class DiskTorusGravity : public PlanetGravity {
+    public:
+        virtual void updateMtx(const TPos3f& rMtx);
+        virtual bool calcOwnGravityVector(TVec3f* pDest, f32* pScalar,
+                                          const TVec3f& rPosition) const;
+
+        TVec3f mLocalPosition;
+        TVec3f mLocalDirection;
+        f32    mRadius;      // distance from torus centre to ring centerline
+        f32    mDiskRadius;  // cross-section radius
+        s32    mEdgeType;
+        bool   mEnableBothSide;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="ConeGravity — cone-shaped field">
+    Pulls actors toward the nearest point on the surface of a cone. The x column of the stored matrix encodes the radius vector, and the y column encodes the axis from base to apex.
+
+    ```cpp
+    class ConeGravity : public PlanetGravity {
+    public:
+        virtual void updateMtx(const TPos3f& rMtx);
+        virtual bool calcOwnGravityVector(TVec3f* pDest, f32* pScalar,
+                                          const TVec3f& rPosition) const;
+
+        TPos3f mLocalMtx;    // encodes radius (x), axis (y), base position
+        TPos3f mWorldMtx;
+        f32    mWorldRadius;
+        bool   mEnableBottom; // include the circular base face
+        f32    mTopCutRate;   // truncate the apex by this fraction
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="WireGravity — polyline / cable gravity">
+    Attracts actors toward the nearest point along an arbitrary polyline defined by a list of vertices. Used for wire, rope, and cable objects.
+
+    ```cpp
+    class WireGravity : public PlanetGravity {
+    public:
+        virtual bool calcOwnGravityVector(TVec3f* pDest, f32* pScalar,
+                                          const TVec3f& rPosition) const;
+
+        void setPointListSize(u32);
+        void addPoint(const TVec3f&);
+
+        MR::Vector< MR::AssignableArray<TVec3f> > mPoints;
+    };
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## PlanetGravityManager
+
+`PlanetGravityManager` is the singleton that owns all active gravity sources for a stage. It is a `NameObj` and therefore participates in the normal init/movement lifecycle.
+
+```cpp
+class PlanetGravityManager : public NameObj {
+public:
+    PlanetGravityManager(const char* pName);
+
+    // Primary query: accumulate gravity from all sources covering rPosition.
+    // gravityType is a bitmask (GRAVITY_TYPE_NORMAL, SHADOW, MAGNET, …).
+    // requester is the calling object pointer; sources whose host == requester
+    // are excluded so objects are not attracted to themselves.
+    bool calcTotalGravityVector(TVec3f* pGravity, GravityInfo* pInfo,
+                                const TVec3f& rPosition,
+                                u32 gravityType, u32 requester) const;
+
+    // Register a new PlanetGravity, sorted by priority.
+    void registerGravity(PlanetGravity* pGravity);
+
+private:
+    PlanetGravity* mGravities[128]; // registered sources
+    s32            mNumGravities;
+};
+```
+
+<Note>
+`mGravities` is a fixed-size array capped at 128 sources. Registering more than 128 gravity objects in one stage is unsupported.
+</Note>
+
+## GravityInfo
+
+`GravityInfo` is the result struct filled in by `calcTotalGravityVector`. Actors store one of these and read it every frame.
+
+```cpp
+class GravityInfo {
+public:
+    GravityInfo();
+    void init();
+
+    TVec3f         mGravityVector;    // normalised accumulated direction
+    s32            mLargestPriority;  // priority of the dominant source
+    PlanetGravity* mGravityInstance;  // pointer to the dominant source
+};
+```
+
+## Gravity type flags
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `GRAVITY_TYPE_NORMAL` | `1` | Standard actor gravity |
+| `GRAVITY_TYPE_SHADOW` | `2` | Shadow projection direction |
+| `GRAVITY_TYPE_MAGNET` | `4` | Magnet-suit attraction |
+| `GRAVITY_TYPE_MARIO_LAUNCHER` | `8` | Launch trajectory gravity |
+
+## Gravity power levels
+
+| Constant | Value | Effect |
+|---|---|---|
+| `GRAVITY_POWER_LIGHT` | `0` | Reduced pull strength |
+| `GRAVITY_POWER_NORMAL` | `1` | Standard pull strength |
+| `GRAVITY_POWER_HEAVY` | `2` | Increased pull strength |

@@ -1,0 +1,57 @@
+---
+title: "nw4r: Nintendo's Wii framework library"
+description: "Nintendo's nw4r provides Wii-era UI layout, math types, font rendering, and debug utilities used alongside JSystem in Super Mario Galaxy 1."
+---
+
+nw4r (Nintendo Wii for Revolution) is Nintendo's Wii-era C++ framework library, designed as the successor to and complement of JSystem. Where JSystem handles 3D rendering and the game's audio sequencer, nw4r provides a UI layout engine, math types, general-purpose utility infrastructure, and debug facilities. In Petari, nw4r is used primarily for the in-game HUD and menus (`nw4r::lyt`), font rendering (`nw4r::ut`), and lightweight math support (`nw4r::math`). The four subsystems correspond directly to the four directories under `src/nw4r/`.
+
+<Info>
+  Note that nw4r does **not** include a sound subsystem in Petari's source tree — Super Mario Galaxy 1 uses JSystem's `JAudio2` for audio rather than `nw4r::snd`, which is absent from this repository.
+</Info>
+
+## Subsystems
+
+<AccordionGroup>
+  <Accordion title="nw4r::lyt — UI layout system">
+    A complete retained-mode UI layout engine that reads Nintendo's binary layout format (`.brlyt`) and animation format (`.brlan`). Layouts are organized as a tree of `Pane` objects; specialized subclasses handle pictures, text boxes, windows, and bounding regions. The `Layout` class owns the root pane tree and drives per-frame animation playback.
+
+    Key source files: `lyt_layout.cpp`, `lyt_pane.cpp`, `lyt_picture.cpp`, `lyt_textBox.cpp`, `lyt_window.cpp`, `lyt_animation.cpp`, `lyt_material.cpp`
+
+    ```cpp
+    namespace nw4r {
+    namespace lyt {
+        // Root layout object — owns the pane tree and animation state
+        class Layout {
+        public:
+            void Animate(u32 flags);
+            void Draw(const DrawInfo& drawInfo);
+        private:
+            static MEMAllocator* mspAllocator;
+        };
+    }
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="nw4r::math — math types">
+    Provides trigonometric functions and core math types (`VEC2`, `VEC3`, `MTX34`, etc.) that complement the RVL SDK's `mtx` library. Used throughout nw4r's layout and utility code.
+
+    Key source files: `math_types.cpp`, `math_triangular.cpp`
+  </Accordion>
+
+  <Accordion title="nw4r::ut — utility types and font rendering">
+    A broad utility layer covering binary file format helpers, font loading and rendering, character stream readers, intrusive linked lists, and tagged text processing. `ut::Font` and its subclasses (`ut::ResFont`, `ut::RomFont`) are used by `nw4r::lyt` text boxes for glyph lookup and drawing.
+
+    Key source files: `ut_Font.cpp`, `ut_ResFont.cpp`, `ut_RomFont.cpp`, `ut_CharWriter.cpp`, `ut_TextWriterBase.cpp`, `ut_LinkList.cpp`, `ut_binaryFileFormat.cpp`
+  </Accordion>
+
+  <Accordion title="nw4r::db — debug utilities">
+    Lightweight assertion and debug-console output. `db_assert.cpp` implements Nintendo's runtime assertion framework; `db_console.cpp` handles formatted text output to a debug overlay. These facilities are active only in debug builds.
+
+    Key source files: `db_assert.cpp`, `db_console.cpp`
+  </Accordion>
+</AccordionGroup>
+
+## Decompilation status
+
+The nw4r subsystems present in this repository are relatively compact. `nw4r::lyt` is the largest and most active area of work; `nw4r::ut` and `nw4r::math` are smaller and largely matched. Check [decomp.dev/SMGCommunity/Petari](https://decomp.dev/SMGCommunity/Petari) for current per-file progress figures.

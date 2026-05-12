@@ -1,0 +1,240 @@
+---
+title: "Animation system: BCK, BTP, BTK, and more"
+description: "Petari's animation subsystem covering skeletal, texture SRT, texture pattern, color, register, and visibility animation playback classes."
+---
+
+Super Mario Galaxy stores its animations in Nintendo's J3D binary formats. Each format targets a different aspect of a model: bone transforms, material colours, texture coordinates, texture frame selections, and mesh visibility. The animation subsystem provides a separate player class for each format. All players share a common `AnmPlayerBase` foundation that manages a `J3DFrameCtrl` and a resource table lookup. Skeletal (BCK) animation is handled by the more capable `XanimePlayer`, which supports multi-track blending, interpolation frames, and per-actor default animations. The `ActorAnimKeeper` class sits above all players and provides a single named-animation interface used by most `LiveActor` subclasses.
+
+## AnmPlayerBase
+
+`AnmPlayerBase` is the shared base for all non-skeletal animation players. It stores the active `J3DAnmBase` resource pointer and a `J3DFrameCtrl` that drives playback timing.
+
+```cpp
+class AnmPlayerBase {
+public:
+    AnmPlayerBase(const ResTable*);
+
+    virtual void changeAnimation(J3DAnmBase*);
+    virtual void stopAnimation();
+
+    void update();
+    void reflectFrame();
+    void start(const char*);
+    void stop();
+    bool isPlaying(const char*) const;
+    bool isStop() const;
+
+    /* 0x04 */ J3DAnmBase*       mAnmRes;    // active animation resource
+    /* 0x08 */ const ResTable*   mResTable;  // resource name lookup
+    /* 0x0C */ J3DFrameCtrl      mFrameCtrl; // playback state
+};
+```
+
+`MaterialAnmPlayerBase` extends this with a `J3DModelData*` pointer and abstract `attach` / `detach` methods used to bind the animation to the model's material array.
+
+```cpp
+class MaterialAnmPlayerBase : public AnmPlayerBase {
+public:
+    MaterialAnmPlayerBase(const ResTable*, J3DModelData*);
+
+    virtual void attach(J3DAnmBase*, J3DModelData*) = 0;
+    virtual void detach(J3DAnmBase*, J3DModelData*) = 0;
+
+    /* 0x20 */ J3DModelData* mModelData;
+};
+```
+
+## Animation players
+
+<AccordionGroup>
+  <Accordion title="XanimePlayer — BCK skeletal animation">
+    `XanimePlayer` is the primary skeletal animation driver. It supports up to two simultaneous tracks with weighted blending, configurable interpolation frame counts, and a default animation that plays when no explicit animation is set.
+
+    ```cpp
+    class XanimePlayer {
+    public:
+        XanimePlayer(J3DModel*, XanimeResourceTable*);
+
+        void changeAnimation(const char*);
+        void changeAnimationBck(const char*);
+        bool changeSimpleBck(const char*);
+        void changeSpeed(f32);
+        void changeInterpoleFrame(s32);
+        bool changeTrackWeight(u32, f32);
+
+        void stopAnimation();
+        void setDefaultAnimation(const char*);
+        void runDefaultAnimation();
+
+        bool isRun(const char*) const;
+        bool isTerminate(const char*) const;
+        f32  tellAnimationFrame() const;
+        const char* getCurrentBckName() const;
+
+        /* 0x00 */ J3DModel*               mModel;
+        /* 0x58 */ const char*             mCurrentBckName;
+        /* 0x5C */ const XanimeGroupInfo*  mDefaultAnimation;
+        /* 0x60 */ const XanimeGroupInfo*  mCurrentAnimation;
+        /* 0x6C */ XanimeCore*             mCore;
+        /* 0x70 */ XanimeResourceTable*    mResourceTable;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="BckCtrl — BCK playback settings table">
+    `BckCtrl` stores a table of `BckCtrlData` entries read from a BCSV file. Each entry overrides playback parameters (start frame, end frame, repeat frame, interpolation length, loop mode) for a named BCK animation.
+
+    ```cpp
+    struct BckCtrlData {
+        const char* _0;         // animation name
+        s16  mPlayFrame;
+        s16  mStartFrame;
+        s16  mEndFrame;
+        s16  mRepeatFrame;
+        s16  mInterpole;        // interpolation frame count
+        u8   mLoopMode;         // 0xFF = inherit default
+    };
+
+    class BckCtrl {
+    public:
+        BckCtrl(ResourceHolder*, const char*);
+
+        BckCtrlData* find(const char*) const;
+        void changeBckSetting(const char*, XanimePlayer*) const;
+
+        BckCtrlData  mDefaultCtrlData;
+        BckCtrlData* mControlData;
+        u32          mControlDataCount;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="BpkPlayer — BPK color animation">
+    Drives material colour-register animation (BPK format). Inherits `MaterialAnmPlayerBase` and implements `attach`/`detach` to bind the colour animation to the model's material.
+
+    ```cpp
+    class BpkPlayer : public MaterialAnmPlayerBase {
+    public:
+        BpkPlayer(const ResourceHolder*, J3DModelData*);
+
+        virtual void attach(J3DAnmBase*, J3DModelData*);
+        virtual void detach(J3DAnmBase*, J3DModelData*);
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="BrkPlayer — BRK TEV register animation">
+    Drives TEV colour-register animation (BRK format). Used to animate material indirect and constant colours that BPK does not cover.
+
+    ```cpp
+    class BrkPlayer : public MaterialAnmPlayerBase {
+    public:
+        BrkPlayer(const ResourceHolder*, J3DModelData*);
+
+        virtual void attach(J3DAnmBase*, J3DModelData*);
+        virtual void detach(J3DAnmBase*, J3DModelData*);
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="BtkPlayer — BTK texture SRT animation">
+    Animates texture scale, rotation, and translation (SRT) parameters on material samplers. Used for scrolling textures, pulsing effects, and UV distortion.
+
+    ```cpp
+    class BtkPlayer : public MaterialAnmPlayerBase {
+    public:
+        BtkPlayer(const ResourceHolder*, J3DModelData*);
+
+        virtual void attach(J3DAnmBase*, J3DModelData*);
+        virtual void detach(J3DAnmBase*, J3DModelData*);
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="BtpPlayer — BTP texture pattern animation">
+    Steps through an indexed sequence of texture frames stored in the model's texture palette. Used for sprite-sheet style animations.
+
+    ```cpp
+    class BtpPlayer : public MaterialAnmPlayerBase {
+    public:
+        BtpPlayer(const ResourceHolder*, J3DModelData*);
+
+        virtual void attach(J3DAnmBase*, J3DModelData*);
+        virtual void detach(J3DAnmBase*, J3DModelData*);
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="BvaPlayer — BVA mesh visibility animation">
+    Toggles individual mesh visibility flags over time (BVA format). Used to show or hide sub-meshes of a model on a per-frame schedule.
+
+    ```cpp
+    class BvaPlayer : public AnmPlayerBase {
+    public:
+        BvaPlayer(const ResTable*, J3DModel*);
+
+        void calc();
+        J3DAnmVisibilityFull* getAnmVisibility();
+
+    private:
+        /* 0x20 */ J3DModel* mModel;
+    };
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Animation format summary
+
+| Format | Player | Animates |
+|---|---|---|
+| BCK | `XanimePlayer` | Bone / joint transforms (skeletal) |
+| BPK | `BpkPlayer` | Material colour registers |
+| BRK | `BrkPlayer` | TEV colour registers |
+| BTK | `BtkPlayer` | Texture SRT (scale, rotation, translation) |
+| BTP | `BtpPlayer` | Texture pattern (frame index) |
+| BVA | `BvaPlayer` | Mesh visibility flags |
+
+## ActorAnimKeeper
+
+`ActorAnimKeeper` is the per-actor animation coordinator. It holds a table of named `ActorAnimKeeperInfo` entries, each of which bundles the BCK, BTK, BRK, BPK, BTP, and BVA animation names that should play together under a single animation name.
+
+```cpp
+struct ActorAnimDataInfo {
+    const char* mName;        // animation resource name
+    f32         mStartFrame;
+    u8          mIsKeepAnim;  // non-zero = do not restart if already playing
+};
+
+struct ActorAnimKeeperInfo {
+    const char*       mName;    // logical animation name (e.g. "Walk")
+    ActorAnimDataInfo mBckInfo;
+    ActorAnimDataInfo mBtkInfo;
+    ActorAnimDataInfo mBrkInfo;
+    ActorAnimDataInfo mBpkInfo;
+    ActorAnimDataInfo mBtpInfo;
+    ActorAnimDataInfo mBvaInfo;
+};
+
+class ActorAnimKeeper {
+public:
+    ActorAnimKeeper(LiveActor*);
+
+    bool start(const char*);     // start all animations listed under this name
+    void update();
+    bool isPlaying(const char*) const;
+    bool initAnimData();
+    ActorAnimKeeperInfo* findAnimInfo(const char*) const;
+    static ActorAnimKeeper* tryCreate(LiveActor*);
+
+    /* 0x0 */ LiveActor*           mActor;
+    /* 0x4 */ s32                  mNumInfo;
+    /* 0x8 */ ActorAnimKeeperInfo* mInfoArray;
+    /* 0xC */ ActorAnimKeeperInfo* mCurrentInfo;
+};
+```
+
+<Note>
+`ActorAnimKeeper::tryCreate` returns `nullptr` if the actor's model does not have an associated animation data BCSV. Always null-check the result before use.
+</Note>
+
+Calling `start("Walk")` on an `ActorAnimKeeper` will simultaneously start the BCK, BTK, BRK, BPK, BTP, and BVA animations listed in the matching `ActorAnimKeeperInfo` row, providing a single consistent call-site for full-model animation changes.

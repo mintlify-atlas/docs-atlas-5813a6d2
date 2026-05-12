@@ -1,0 +1,181 @@
+---
+title: "Scene management in Super Mario Galaxy"
+description: "Scenes own the object executor lists, subsystem holders, and Nerve-driven state machine that coordinate the full game loop for each game mode."
+---
+
+A *scene* in Super Mario Galaxy is the top-level container for an entire game mode — the gameplay stage, a cutscene, a logo screen, the scenario select screen, and so on. Each scene owns the ordered lists that drive per-frame object updates, a `SceneObjHolder` that lazily creates and caches global subsystem objects, and a Nerve state machine that sequences high-level scene states such as intro camera, pause menu, and star-get demo.
+
+## Scene class hierarchy
+
+The project defines the following concrete scene classes under `src/Game/Scene/`:
+
+| Class | File | Purpose |
+|---|---|---|
+| `Scene` | `Scene.cpp` | Abstract base; owns `SceneNameObjListExecutor` and `SceneObjHolder`. |
+| `GameScene` | `GameScene.cpp` | Main gameplay scene; manages all in-game states and sequences. |
+| `LogoScene` | `LogoScene.cpp` | Nintendo/developer logo display on boot. |
+| `IntermissionScene` | `IntermissionScene.cpp` | Galaxy map and between-stage transitions. |
+| `ScenarioSelectScene` | `ScenarioSelectScene.cpp` | Comet Observatory mission selection. |
+| `PlayTimerScene` | `PlayTimerScene.cpp` | Time Attack mode scene wrapper. |
+
+## Base class: `Scene`
+
+```cpp
+// include/Game/Scene/Scene.hpp
+class Scene : public NerveExecutor {
+public:
+    Scene(const char*);
+
+    virtual ~Scene();
+    virtual void init();
+    virtual void start();
+    virtual void update();
+    virtual void draw() const;
+    virtual void calcAnim();
+
+    void initNameObjListExecutor();
+    void initSceneObjHolder();
+
+    /* 0x08 */ SceneNameObjListExecutor* mListExecutor;
+    /* 0x10 */ SceneObjHolder*           mSceneObjHolder;
+};
+```
+
+`Scene` inherits from `NerveExecutor`, meaning the scene itself is driven by the same Nerve state machine used by `LiveActor`. High-level scene states (intro, gameplay, pause, game-over) are each a `Nerve` that the scene transitions between.
+
+## Main gameplay scene: `GameScene`
+
+```cpp
+// include/Game/Scene/GameScene.hpp
+class GameScene : public Scene {
+public:
+    GameScene();
+
+    virtual ~GameScene();
+    virtual void init();
+    virtual void start();
+    virtual void update();
+    virtual void draw() const;
+    virtual void calcAnim();
+
+    // Scene state executors (called by the scene's current Nerve)
+    void exeScenarioOpeningCamera();
+    void exeScenarioStarter();
+    void exeSceneAction();
+    void exePauseMenu();
+    void exePowerStarGet();
+    void exeGrandStarGet();
+    void exeGameOver();
+    void exeTimeUp();
+    void exeStaffRoll();
+
+    // Sequenced demo requests
+    void requestPlayMovieDemo();
+    void requestPowerStarGetDemo();
+    void requestGrandStarGetDemo();
+
+    /* 0x18 */ GameSceneScenarioOpeningCameraState* mScenarioCamera;
+    /* 0x1C */ GameScenePauseControl*               mPauseCtrl;
+    /* 0x20 */ GamePauseSequence*                   mPauseSeq;
+    /* 0x24 */ GameStageClearSequence*               mStageClearSeq;
+    /* 0x28 */ bool                                  mDraw3D;
+};
+```
+
+## What a scene manages
+
+<AccordionGroup>
+  <Accordion title="Object executor lists (SceneNameObjListExecutor)">
+    `SceneNameObjListExecutor` extends `NameObjListExecutor` and owns four
+    ordered lists — movement, animation, view-and-entry, and draw — each
+    populated during `init()`. Every frame the scene calls `update()`, which
+    iterates each list and dispatches the corresponding virtual function on
+    every registered `NameObj`.
+
+    ```cpp
+    // include/Game/Scene/SceneNameObjListExecutor.hpp
+    class SceneNameObjListExecutor : public NameObjListExecutor {
+    public:
+        virtual void initMovementList();
+        virtual void initCalcAnimList();
+        virtual void initCalcViewAndEntryList();
+        virtual void initDrawList();
+    };
+    ```
+  </Accordion>
+  <Accordion title="Global subsystems (SceneObjHolder)">
+    `SceneObjHolder` lazily creates and caches scene-global singleton objects
+    indexed by the `SceneObj` enum. Subsystems are created on first access and
+    destroyed with the scene.
+
+    ```cpp
+    // include/Game/Scene/SceneObjHolder.hpp
+    class SceneObjHolder {
+    public:
+        NameObj* create(int id);
+        NameObj* getObj(int id) const;
+        bool     isExist(int id) const;
+
+    private:
+        NameObj* mObj[SceneObj_NumMax];  // sparse array of subsystem pointers
+    };
+    ```
+
+    Commonly accessed entries include:
+
+    | Enum value | Subsystem |
+    |---|---|
+    | `SceneObj_CollisionDirector` | Triangle collision system |
+    | `SceneObj_PlanetGravityManager` | Multi-directional gravity |
+    | `SceneObj_CameraDirector` | Camera and rail management |
+    | `SceneObj_EffectSystem` | Particle effects |
+    | `SceneObj_LightDirector` | Stage lighting |
+    | `SceneObj_AllLiveActorGroup` | Flat list of all live actors |
+    | `SceneObj_AreaObjContainer` | Trigger area volumes |
+    | `SceneObj_StageSwitchContainer` | Binary stage-switch flags |
+
+    Any code can retrieve a subsystem by calling:
+
+    ```cpp
+    // From anywhere that has scene context
+    T* sys = MR::getSceneObj<T>(SceneObj_PlanetGravityManager);
+    ```
+  </Accordion>
+  <Accordion title="Nerve-driven scene states">
+    Because `Scene` extends `NerveExecutor`, each high-level scene phase is a
+    `Nerve`. In `GameScene`, the active nerve determines which `exe*()` method
+    runs each frame. For example, after the opening camera finishes,
+    `setNerveAfterPauseMenu()` selects the appropriate gameplay nerve based on
+    the current game state.
+
+    Transitions between phases — such as entering the pause menu or triggering
+    a star-get demo — are requested through methods like
+    `requestPowerStarGetDemo()`, which internally calls `setNerve()`.
+  </Accordion>
+</AccordionGroup>
+
+## Scene transitions
+
+The game uses a `SceneFactory` (see `src/Game/Scene/SceneFactory.cpp`) to construct and destroy scene instances. When a transition is triggered — for example, selecting a galaxy on the map — the current scene is torn down (destroying all its registered `NameObj` instances and subsystems), a new scene is constructed, and `init()` followed by `start()` are called on it.
+
+<Tip>
+  Because all `NameObj` instances are destroyed when the scene ends, any object
+  that needs to persist across scene transitions must store its data outside the
+  scene (for example, in a save-file buffer or a global singleton that is not
+  owned by `SceneObjHolder`).
+</Tip>
+
+## Additional scene-related source files
+
+| File | Purpose |
+|---|---|
+| `SceneFactory.cpp` | Constructs the correct `Scene` subclass by name |
+| `SceneExecutor.cpp` | Drives the outer `init → start → update → draw` loop |
+| `SceneFunction.cpp` | Free helper functions operating on the current scene |
+| `SceneDataInitializer.cpp` | Loads stage layout data and triggers object placement |
+| `StageDataHolder.cpp` | Caches raw stage archive data for `JMapInfo` access |
+| `StageFileLoader.cpp` | Handles streaming and decompression of stage archives |
+| `SceneObjHolder.cpp` | `newEachObj` factory — maps enum IDs to concrete types |
+| `SceneNameObjListExecutor.cpp` | Populates the four executor lists for gameplay |
+| `ScenePlayingResult.cpp` | Tracks end-of-stage results (stars collected, time, etc.) |
+| `StopSceneController.cpp` | Pauses the scene update loop during certain demos |

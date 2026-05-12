@@ -1,0 +1,218 @@
+---
+title: "Code style and conventions for Petari"
+description: "Naming conventions, formatting rules, header structure, and class layout that all Petari contributions must follow to produce matching symbols."
+---
+
+Every symbol in Petari must match the original game binary exactly — including typos. That means code style is not just about readability; the wrong name, the wrong type, or a stray `this->` can all prevent a match. Read these conventions carefully before submitting code.
+
+## Naming conventions
+
+<AccordionGroup>
+  <Accordion title="Known symbols">
+    If a symbol is present in the game's symbol map, your identifier must match it **exactly**, even if the original contains a typo. Do not correct spelling in symbol names.
+  </Accordion>
+
+  <Accordion title="Member variables">
+    All member variables must be prefixed with `m`.
+
+    ```cpp
+    class HitSensor {
+    public:
+        /* 0x00 */ u32 mType;
+        /* 0x04 */ TVec3f mPosition;
+        /* 0x10 */ f32 mRadius;
+        /* 0x14 */ u16 mSensorCount;
+        /* 0x16 */ u16 mGroupSize;
+        /* 0x18 */ HitSensor** mSensors;
+        /* 0x1C */ SensorGroup* mSensorGroup;
+        /* 0x20 */ bool mValidBySystem;
+        /* 0x21 */ bool mValidByHost;
+        /* 0x24 */ LiveActor* mHost;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Function arguments">
+    Function arguments must be prefixed based on how they are passed:
+
+    - `p` — pointer argument
+    - `r` — reference argument
+
+    ```cpp
+    HitSensor* getSensor(const char* pSensorName) const;
+    void initBinder(f32, f32, u32);
+    virtual void init(const JMapInfoIter& rIter);
+    ```
+  </Accordion>
+
+  <Accordion title="Static and global variables">
+    - Static variables with no known symbol: prefix with `s`
+    - Global-scope variables: prefix with `g`
+  </Accordion>
+
+  <Accordion title="Unknown symbols (inlined functions)">
+    Functions with no corresponding symbol — such as inlined functions — must use **camelCase**.
+
+    ```cpp
+    bool isNerve(const Nerve* pNerve) const;
+    s32 getNerveStep() const;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Null pointers
+
+Use `nullptr` in C++ code when assigning or comparing a pointer. Use `NULL` in C code. Never use `0` for pointer comparisons.
+
+```cpp
+// Correct — C++
+if (mModelManager == nullptr) {
+    return nullptr;
+}
+
+// Correct — C
+if (pSensor == NULL) {
+    return NULL;
+}
+
+// Incorrect — do not use 0 for pointers
+if (mModelManager == 0) { ... }
+```
+
+## Headers
+
+<AccordionGroup>
+  <Accordion title="pragma once">
+    Every header file must begin with `#pragma once` as the very first line.
+
+    ```cpp
+    #pragma once
+
+    #include "Game/LiveActor/EffectKeeper.hpp"
+    ```
+  </Accordion>
+
+  <Accordion title="Forward declarations">
+    Prefer forward declarations over full includes when you only need a pointer or reference to a type. This reduces compilation time and avoids circular dependencies.
+
+    ```cpp
+    #pragma once
+
+    // Forward declarations — no full includes needed
+    class LiveActor;
+    class SensorGroup;
+
+    class HitSensor {
+    public:
+        HitSensor(u32 type, u16 groupSize, f32 radius, LiveActor* pHost);
+        // ...
+        /* 0x24 */ LiveActor* mHost;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Include paths">
+    Include paths must be relative to the `include/` directory.
+
+    ```cpp
+    // System libraries — angle brackets
+    #include <JSystem/JGeometry/TVec.hpp>
+    #include <revolution/types.h>
+
+    // Game headers — quoted, relative to include/
+    #include "Game/LiveActor/HitSensorKeeper.hpp"
+    #include "Game/NameObj/NameObj.hpp"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Class structure
+
+<AccordionGroup>
+  <Accordion title="Function order">
+    Functions within a class must appear in this order:
+
+    1. Constructor
+    2. Destructor
+    3. Operators
+    4. Virtual functions
+    5. Member functions
+
+    <Note>
+      If virtual functions must appear in a different order to match the vtable layout, vtable order takes priority over this rule.
+    </Note>
+
+    ```cpp
+    class LiveActor : public NameObj {
+    public:
+        LiveActor(const char* pName);         // 1. Constructor
+        virtual ~LiveActor() {}               // 2. Destructor
+        virtual void init(...) override;      // 4. Virtual functions
+        virtual void movement();
+        virtual void appear();
+        // ...
+        void calcAnmMtx();                    // 5. Member functions
+        void setNerve(const Nerve* pNerve);
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Avoid this->">
+    Do not use `this->` to reference class members unless the compiler requires it for disambiguation. Omit it in all other cases.
+
+    ```cpp
+    // Correct
+    void LiveActor::kill() {
+        mFlag.mDead = true;
+    }
+
+    // Incorrect
+    void LiveActor::kill() {
+        this->mFlag.mDead = true;
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Documentation syntax
+
+All class members and functions must be documented using the following Doxygen-style comment format. If you encounter a header that is missing this documentation, please add it.
+
+**Member variables** — include the struct offset as a block comment, then an inline doc comment:
+
+```cpp
+/* member-offset */     s32 varName;    ///< Description.
+```
+
+**Functions** — use `@brief`, `@param`, `@return`, and optionally `@note`:
+
+```cpp
+/// @brief Function does a thing.
+/// @param argumentName Is an argument.
+/// @return If the function did a thing.
+/// @note Might have not done a thing...
+bool func(s32 argumentName);
+```
+
+A fully documented excerpt from `LiveActor.hpp`:
+
+```cpp
+/// @brief Gets a sensor.
+/// @param pSensorName The name of the sensor to get.
+/// @returns The sensor that contains the name given. Returns the result of
+///          HitSensorKeeper::getSensor or NULL if there is no HitSensorKeeper created.
+HitSensor* getSensor(const char* pSensorName) const;
+
+/// @brief The three-dimensional location vector.
+/* 0x0C */ TVec3f mPosition;
+
+/// @brief The three-dimensional rotation vector, in degrees.
+/* 0x18 */ TVec3f mRotation;
+
+/// @brief A pointer to a ModelManager instance, used for drawing a 3D model.
+/* 0x48 */ ModelManager* mModelManager;
+```
+
+## clang-format
+
+Enable `clang-format` to run on save in your editor. It handles most whitespace and brace formatting automatically, so you can focus on correctness rather than style.

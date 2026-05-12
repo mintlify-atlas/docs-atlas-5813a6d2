@@ -1,0 +1,117 @@
+---
+title: "RVL SDK, Runtime, and system libraries"
+description: "Low-level Wii SDK modules, the Metrowerks C runtime, CodeWarrior runtime support, and the MetroTRK debugger stub included in the Petari decompilation."
+---
+
+Super Mario Galaxy 1 sits on top of several layers of system software that are included in Petari's source tree. The lowest layer is the RVL SDK — Nintendo's official Wii platform SDK, covering the operating system, graphics hardware, audio DSP, input, networking, and more. Above that sits the Metrowerks Standard Library (`MSL_C`) and the CodeWarrior C++ runtime (`Runtime`), which provide the C standard library and C++ language support. Finally, `MetroTRK` is the Metrowerks Target Resident Kernel, a debugger stub embedded in shipping Wii executables to support on-target debugging.
+
+<Info>
+  The RVL SDK source in this repository is sourced from the [doldecomp/sdk_2009-12-11](https://github.com/doldecomp/sdk_2009-12-11) project. Credit goes to the doldecomp team for their SDK decompilation work.
+</Info>
+
+## RVL SDK (`src/RVL_SDK/`)
+
+The RVL SDK exposes 36 subsystem directories. Most are used indirectly by the game layer through thin wrapper APIs. The table below lists every module found in the source tree.
+
+<AccordionGroup>
+  <Accordion title="Core OS and hardware modules">
+    | Module | Purpose |
+    |--------|---------|
+    | `os` | Operating system: threads, alarms, interrupts, memory, and IPC |
+    | `vi` | Video interface: frame buffer management and video mode setup |
+    | `gx` | Graphics: GX command buffer, display lists, and state management |
+    | `gd` | Graphics display list helpers |
+    | `mtx` | Matrix and vector math (hardware-accelerated PSQ instructions) |
+    | `base` | SDK initialization and version info |
+    | `db` | Debug output and assertions |
+  </Accordion>
+
+  <Accordion title="Audio">
+    | Module | Purpose |
+    |--------|---------|
+    | `ax` | AX DSP audio mixer: voices, effects bus, and callback scheduling |
+    | `axfx` | AX effect plug-ins (reverb, chorus, delay) |
+    | `ai` | Audio interface: DMA to the audio DAC |
+    | `dsp` | DSP task queue and ARAM management |
+  </Accordion>
+
+  <Accordion title="Input">
+    | Module | Purpose |
+    |--------|---------|
+    | `pad` | GameCube controller input |
+    | `wpad` | Wii Remote input (core + extensions) |
+    | `kpad` | Wii Remote extension library (Nunchuk, Classic Controller) |
+    | `si` | Serial interface — low-level controller communication |
+  </Accordion>
+
+  <Accordion title="Storage and filesystem">
+    | Module | Purpose |
+    |--------|---------|
+    | `dvd` | DVD drive: file open, read, and async I/O |
+    | `arc` | ARC archive format (Nintendo's ROM filesystem) |
+    | `nand` | NAND flash filesystem |
+    | `fs` | High-level filesystem abstraction |
+    | `vf` | Virtual filesystem utilities |
+    | `rso` | Relocatable shared object loader |
+  </Accordion>
+
+  <Accordion title="Networking and wireless">
+    | Module | Purpose |
+    |--------|---------|
+    | `net` | TCP/IP networking stack |
+    | `nwc24` | Nintendo Wi-Fi Connection 24 (WiiConnect24) |
+    | `bte` | Bluetooth stack (sourced from doldecomp/sdk_2009-12-11) |
+    | `wud` | Wii USB Dongle (wireless controller adapter) |
+    | `usb` | USB host driver |
+    | `exi` | EXternal Interface — memory card and serial communications |
+    | `ipc` | Inter-processor communication between Broadway and Starlet |
+  </Accordion>
+
+  <Accordion title="Media and miscellaneous">
+    | Module | Purpose |
+    |--------|---------|
+    | `thp` | THP video decoder |
+    | `tpl` | Texture palette library (`.tpl` texture format) |
+    | `mem` | Expanded heap allocators (frame heap, unit heap) |
+    | `sc` | System configuration (region, parental controls, etc.) |
+    | `esp` | e-Shop / save data protection |
+    | `euart` | EXI UART (debug serial port) |
+    | `wenc` | Wii encoder (video scaler/encoder) |
+    | `aralt` | ARAM alternative access utilities |
+  </Accordion>
+</AccordionGroup>
+
+## MSL_C — Metrowerks Standard Library (`src/MSL_C/`)
+
+`MSL_C` is the C runtime library shipped with CodeWarrior and linked into every Wii executable. It provides the standard C library: `printf`/`scanf` family, `malloc`/`free`, string functions, `math.h`, locale, wide-character support, and file I/O adapters for the Wii's DVD backend.
+
+Key source files: `printf.c`, `scanf.c`, `alloc.c`, `mem_funcs.c`, `string.c`, `math_ppc.c`, `wprintf.c`, `ctype.c`, `float.c`
+
+```cpp
+// MSL_C plugs into the RVL SDK's DVD layer for file I/O.
+// All standard FILE* operations ultimately call through dvd_fread / dvd_fwrite.
+```
+
+<Tip>
+  MSL_C files are generally considered infrastructure — they are either fully matched or excluded from active decompilation work. The focus of the Petari project is the game-specific code under `src/Game/`.
+</Tip>
+
+## Runtime — CodeWarrior C++ runtime (`src/Runtime/`)
+
+The CodeWarrior runtime provides the C++ language machinery that the compiler depends on but does not inline: global constructor and destructor chains, C++ exception handling (Nintendo's `NMWException` / `Gecko_ExceptionPPC`), `va_arg` support, and the default `operator new`/`operator delete` implementations.
+
+| File | Purpose |
+|------|---------|
+| `__init_cpp_exceptions.cpp` | Registers the C++ exception fragment with the OS linker |
+| `global_destructor_chain.c` | Drives `atexit`-style global destructors at shutdown |
+| `NMWException.cpp` | Metrowerks exception table walking |
+| `Gecko_ExceptionPPC.cpp` | PPC-specific exception propagation |
+| `GCN_mem_alloc.c` | Default heap allocator backing `new`/`delete` |
+| `ptmf.c` | Pointer-to-member-function call thunks |
+| `__va_arg.c` | Variable-argument list support |
+
+## MetroTRK — Metrowerks Target Resident Kernel (`src/MetroTRK/`)
+
+MetroTRK is a compact debugger stub embedded directly in the game's DOL binary. It communicates with the CodeWarrior IDE over a hardware connection (EXI or USB) and supports breakpoints, memory inspection, and register access. The stub is organized into `debugger/` (the portable TRK core with OS and processor back-ends) and `gamedev/` (the custom connection layer for the Wii target).
+
+In a shipping game, MetroTRK is present but largely inert — it initializes only when the debugger handshake is detected. Its decompilation is tracked alongside the other system libraries.

@@ -1,0 +1,85 @@
+---
+title: "Understanding common BSS in GameCube/Wii builds"
+description: "Common BSS is a special linker-managed area at the end of .bss that holds deduplicated global symbols compiled with the -common on flag."
+---
+
+Common BSS is a region within the `.bss` segment that the CodeWarrior linker manages separately from ordinary uninitialized global variables. When `mwcc` compiles a file with the `-common on` flag, any global variable without an explicit initializer is emitted as a **common** symbol rather than a standard global. The linker collects all common symbols, deduplicates those with identical names across translation units, and allocates them together at the **end** of `.bss`, after all regular `.bss` symbols. Understanding and correctly modeling this layout is essential for producing link-accurate builds.
+
+## Why `-common on` exists
+
+The `-common on` flag enables a pattern common in older C/C++ codebases: defining an uninitialized global variable in a header without marking it `extern`.
+
+```cpp
+// foo.h
+int foo;
+```
+
+With `-common on`, every translation unit that includes `foo.h` emits `foo` as a common symbol. The linker deduplicates the copies and places one instance in the common BSS area — no "multiple definition" error is raised. With `-common off`, the same header would cause a linker error when included in more than one `.cpp` file, because `foo` would be emitted as an ordinary global symbol in each.
+
+## Defining common BSS in splits.txt
+
+A source file can have both a regular `.bss` range and a common `.bss` range. Both use the `.bss` section name; the common range is distinguished by the `common` attribute.
+
+```yaml
+foo.cpp:
+    .text       start:0x80047E5C end:0x8004875C
+    .ctors      start:0x803A54C4 end:0x803A54C8
+    .data       start:0x803B1B40 end:0x803B1B60
+    .bss        start:0x803DF828 end:0x803DFA8C
+    .bss        start:0x8040D4AC end:0x8040D4D8 common
+```
+
+Tagging common ranges correctly matters because decomp-toolkit uses this information when resolving the final link order. A file whose common `.bss` area sits at the very end of `.bss` may otherwise appear to conflict with files near the start of the link order.
+
+## Detecting common BSS
+
+### Using a map file
+
+The clearest signal comes from the linker map. Common symbols lack a `.bss` section symbol of their own. Look for a place in `.bss` where the owning file jumps unexpectedly from a late position in the link order to a very early one:
+
+```
+# Section Addr | Size | Addr | Alignment | Name | File
+00016e60 00000c 805069c0  1 .bss    utilityU.a PSMainSide_CreaturePrm.cpp
+00016e60 00000c 805069c0  4 @3464   utilityU.a PSMainSide_CreaturePrm.cpp
+00016e6c 000048 805069cc  4 saoVVOutput_direction___Q214JStudio_JStage14TAdaptor_light  JSystem.a object-light.cpp
+00016eb4 0000d0 80506a14  4 saoVVOutput___Q214JStudio_JStage14TAdaptor_actor            JSystem.a object-actor.cpp
+```
+
+`PSMainSide_CreaturePrm.cpp` is near the end of the link order. The very next symbol belongs to `object-light.cpp`, which is near the beginning. A file cannot appear at both extremes, so `saoVVOutput_direction___Q214JStudio_JStage14TAdaptor_light` is almost certainly the first common BSS symbol. Note also that `object-actor.cpp` and subsequent files have no `.bss` section symbol of their own — section symbols are not generated for common BSS.
+
+### Using Ghidra without a map
+
+Without a map file, examine XREFs in Ghidra. If a symbol resides near the **end** of `.bss` but has cross-references from addresses clustered near the **beginning** of `.text`, that combination is a strong indicator that the symbol belongs to common BSS rather than regular `.bss`.
+
+For binaries built with older linkers, the inflation bug described below provides an additional detection method.
+
+## Inflation bug
+
+<Warning>
+  The inflation bug affects binaries linked with CodeWarrior for GameCube 2.6 and earlier. Reproducing it requires a `.comment` section to be present in the object file. See [Comment section](/configuration/comment-section) for details.
+</Warning>
+
+In older versions of `mwld` (GC 2.6 and earlier), the linker miscalculates the size of common symbols. When it processes a translation unit's common BSS symbols, it sets the **reported size** of the first common symbol in that TU to the total size of **all** common symbols in that TU, rather than just its own size.
+
+**Example from Pikmin 2 (JUTGamePad.cpp):**
+
+```
+00017260 000188 80506dc0  4 mPadList__10JUTGamePad      JSystem.a JUTGamePad.cpp
+000173e8 000030 80506f48  4 mPadStatus__10JUTGamePad    JSystem.a JUTGamePad.cpp
+00017418 0000c0 80506f78  4 mPadButton__10JUTGamePad    JSystem.a JUTGamePad.cpp
+000174d8 000040 80507038  4 mPadMStick__10JUTGamePad    JSystem.a JUTGamePad.cpp
+00017518 000040 80507078  4 mPadSStick__10JUTGamePad    JSystem.a JUTGamePad.cpp
+00017558 00000c 805070b8  4 sPatternList__19JUTGamePadLongPress  JSystem.a JUTGamePad.cpp
+```
+
+`mPadList__10JUTGamePad` is reported as `0x188` bytes, but its true size is only `0xC` bytes:
+
+```
+0x188 - 0x30 - 0xC0 - 0x40 - 0x40 - 0xC = 0xC
+```
+
+The inflated size equals the sum of all common symbols in the TU. This pattern can be used to determine TU boundaries without a map file: if a `.bss` symbol is dramatically larger than expected, subtract the sizes of the symbols that immediately follow it to recover both its true size and the end of that TU's common BSS range.
+
+<Note>
+  To reproduce the inflation bug in a rebuilt binary, the generated object file must include a `.comment` section. Without it, `mwld` will record the correct sizes and the inflated layout will not match the original binary. See [Comment section](/configuration/comment-section).
+</Note>

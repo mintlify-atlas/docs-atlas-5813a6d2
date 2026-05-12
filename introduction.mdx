@@ -1,0 +1,72 @@
+---
+title: "Petari: Super Mario Galaxy 1 Decompilation"
+description: "Petari reconstructs Super Mario Galaxy 1's original C++ source by decompiling the Korean Wii binary to produce byte-for-byte identical output."
+---
+
+Petari is a community-driven effort to reverse-engineer Super Mario Galaxy 1 back into readable, compilable C++ source code. The project targets the Korean game versions (`RMGK01` and `RMGK02`) and uses CodeWarrior 3.0a3 to produce output that is binary-identical to the original game executable. No game assets are included — you need an existing copy of the game.
+
+<CardGroup cols={2}>
+  <Card title="Set up your environment" icon="gear" href="/setup/dependencies">
+    Install the required tools on Windows, macOS, or Linux before building.
+  </Card>
+  <Card title="Build the project" icon="hammer" href="/setup/building">
+    Clone the repo, extract your game disc, configure, and run your first build.
+  </Card>
+  <Card title="Verify matches with objdiff" icon="code-compare" href="/setup/diffing">
+    Use the objdiff tool to check that your decompiled functions match the original binary.
+  </Card>
+  <Card title="Start contributing" icon="code-pull-request" href="/contributing/guidelines">
+    Learn the code style rules, naming conventions, and submission requirements.
+  </Card>
+</CardGroup>
+
+## What is Petari?
+
+Game decompilation is the process of reading a compiled binary and writing equivalent C++ source code that, when compiled with the same compiler and flags, produces a byte-for-byte identical binary. Petari does this for Super Mario Galaxy 1.
+
+The project is **not** a PC port. It is purely a research and preservation effort to understand how the game was originally written.
+
+<Note>
+  You must own a legitimate copy of Super Mario Galaxy 1 (Korean version `RMGK01` or `RMGK02`) to build the project. The repository contains no game assets.
+</Note>
+
+## Project structure
+
+<CardGroup cols={2}>
+  <Card title="Configuration files" icon="file-code" href="/configuration/splits">
+    `splits.txt` and `symbols.txt` define how the binary is divided into source files and how symbols are mapped to addresses.
+  </Card>
+  <Card title="Code reference" icon="book" href="/reference/live-actor">
+    Browse the reconstructed C++ class hierarchy — from the base `LiveActor` through enemies, bosses, and game subsystems.
+  </Card>
+  <Card title="CI / GitHub Actions" icon="circle-check" href="/ci/github-actions">
+    Set up automated builds and progress tracking with the included GitHub Actions workflow.
+  </Card>
+  <Card title="Contributing guide" icon="users" href="/contributing/workflow">
+    Understand the full contribution workflow: disassemble, write C++, verify with objdiff, and submit a pull request.
+  </Card>
+</CardGroup>
+
+## Supported versions
+
+| Version ID | Description        |
+|------------|--------------------|
+| `RMGK01`   | Rev 0 (Korea)      |
+| `RMGK02`   | Rev 1 (Korea)      |
+
+## Quick start
+
+<Steps>
+  <Step title="Install dependencies">
+    Install Python, Ninja, and (on non-Windows) Wine. See [Dependencies](/setup/dependencies) for platform-specific instructions.
+  </Step>
+  <Step title="Clone and extract">
+    Clone the repository, then use Dolphin Emulator to extract `sys/main.dol` from your game disc into `orig/RMGK01/`.
+  </Step>
+  <Step title="Configure and build">
+    Run `python configure.py` to generate the build files, then `ninja` to perform the initial analysis and build.
+  </Step>
+  <Step title="Start decompiling">
+    Open `objdiff` and select an unmatched function to begin writing C++ that matches the original assembly.
+  </Step>
+</Steps>

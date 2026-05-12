@@ -1,0 +1,86 @@
+---
+title: "Install the required build dependencies for Petari"
+description: "Set up Python, Ninja, and a Windows binary wrapper (Wine or wibo) on your platform before you can build Petari for the first time."
+---
+
+Petari's build system requires a small set of tools: Python 3 to run the configure script, Ninja as the build executor, and either Wine or the lightweight `wibo` wrapper to run the CodeWarrior compiler (a Windows binary) on non-Windows platforms. The exact tools and install steps differ by operating system — follow the section for your platform below.
+
+<Tabs>
+  <Tab title="Windows">
+    On Windows, native tooling is used directly — WSL and msys2 are **not** required and are not recommended.
+
+    <Warning>
+      When running under WSL, objdiff is unable to receive filesystem notifications, so automatic rebuilds will not work. Use native Windows tooling instead.
+    </Warning>
+
+    **Python**
+
+    Install Python from the official site and make sure to add it to `%PATH%` during setup:
+
+    ```bash
+    # Option 1: download the installer from https://www.python.org/downloads/
+    # Option 2: install from the Windows Store (Python 3.11)
+    # Option 3: install via winget
+    winget install Python.Python.3
+    ```
+
+    **Ninja**
+
+    Download the Ninja binary from GitHub and add it to `%PATH%`, or install it via pip:
+
+    ```bash
+    pip install ninja
+    ```
+  </Tab>
+  <Tab title="macOS">
+    Both Ninja and Wine are available through Homebrew.
+
+    **Ninja**
+
+    ```bash
+    brew install ninja
+    ```
+
+    **Wine Crossover**
+
+    The CodeWarrior compiler is a 32-bit Windows binary, so Wine is required to run it on macOS:
+
+    ```bash
+    brew install --cask --no-quarantine gcenx/wine/wine-crossover
+    ```
+
+    <Note>
+      After a macOS upgrade, if the system flags `Wine Crossover.app` as unverified, remove the quarantine attribute with:
+
+      ```bash
+      sudo xattr -rd com.apple.quarantine '/Applications/Wine Crossover.app'
+      ```
+    </Note>
+  </Tab>
+  <Tab title="Linux">
+    **Ninja**
+
+    Install Ninja from your distribution's package manager. For example, on Debian/Ubuntu:
+
+    ```bash
+    sudo apt install ninja-build
+    ```
+
+    **Wine or wibo**
+
+    On **x86\_64** Linux, [wibo](https://github.com/decompals/wibo) — a minimal 32-bit Windows binary wrapper — is automatically downloaded and used by the build system. No manual installation is needed.
+
+    On **non-x86** platforms (e.g. ARM), install Wine from your package manager instead:
+
+    ```bash
+    # Debian/Ubuntu
+    sudo apt install wine
+
+    # Fedora
+    sudo dnf install wine
+
+    # Arch Linux
+    sudo pacman -S wine
+    ```
+  </Tab>
+</Tabs>

@@ -1,0 +1,326 @@
+---
+title: "Enemy actors in Super Mario Galaxy"
+description: "The large variety of enemy types, their LiveActor base classes, and the shared WalkerState* state machine pattern used across most ground enemies."
+---
+
+Super Mario Galaxy 1 ships with over 90 unique enemy types. All enemies inherit `LiveActor` and follow the same lifecycle: `init`, `control`, `attackSensor`, `receiveMsgPlayerAttack`, and `receiveOtherMsg`. Ground-crawling enemies additionally share a set of reusable AI state classes prefixed `WalkerState`, which handle wandering, chasing, finding the player, stagger reactions, and star-pointer binding.
+
+<Note>
+  The `Enemy.hpp` aggregate header includes the most commonly used enemy headers. Additional enemies — such as `Balloonfish`, `Jellyfish`, `NokonokoLand`, and `Teresa` — live in `include/Game/Enemy/` but are not re-exported by the aggregate.
+</Note>
+
+## WalkerState pattern
+
+Most ground enemies compose their AI from four or five `WalkerState*` objects rather than implementing state logic directly in the actor. Each state subclasses `ActorStateBase<LiveActor>` and holds a reference to the host actor and shared `WalkerStateParam` constants.
+
+<AccordionGroup>
+  <Accordion title="WalkerStateWander — idle patrol">
+    The enemy walks to a random nearby point, waits, then picks a new destination. Controlled by speed, walk time, wait time, and a territorial radius.
+
+    ```cpp
+    class WalkerStateWanderParam {
+    public:
+        /* 0x00 */ s32 mWaitTime;
+        /* 0x04 */ s32 mWalkTime;
+        /* 0x08 */ f32 mSpeed;
+        /* 0x0C */ f32 mTurnMaxRateDegree;
+        /* 0x10 */ f32 mTargetDistance;
+    };
+
+    class WalkerStateWander : public ActorStateBase<LiveActor> {
+    public:
+        WalkerStateWander(LiveActor* pHost, TVec3f* pDirection,
+                          WalkerStateParam* pStateParam,
+                          WalkerStateWanderParam* pWanderParam);
+
+        virtual void appear();
+
+        void setWanderCenter(const TVec3f& rCenter);
+        void exeWait();
+        void exeWalk();
+
+        /* 0x10 */ TVec3f* mDirection;
+        /* 0x14 */ TerritoryMover* mTerritoryMover;
+        /* 0x18 */ WalkerStateParam* mStateParam;
+        /* 0x1C */ WalkerStateWanderParam* mWanderParam;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="WalkerStateFindPlayer — spot and react">
+    Triggers when the enemy first senses the player. Optionally plays a jump-start animation to signal awareness before transitioning to chase.
+
+    ```cpp
+    class WalkerStateFindPlayerParam {
+    public:
+        /* 0x0 */ u32 mJumpStartStep;
+        /* 0x4 */ f32 mJumpVelocity;
+        /* 0x8 */ f32 mTurnMaxRateDegree;
+    };
+
+    class WalkerStateFindPlayer : public ActorStateBase<LiveActor> {
+    public:
+        WalkerStateFindPlayer(LiveActor* pHost, TVec3f* pPosition,
+                              WalkerStateParam* pStateParam,
+                              WalkerStateFindPlayerParam* pFindPlayerParam);
+
+        virtual void appear();
+
+        void exeFind();
+        void exeFindJumpStart();
+        void exeFindJump();
+        void exeFindJumpEnd();
+        bool isInSightPlayer() const;
+        bool isFindJumpBegin() const;
+        bool isLandStart() const;
+
+        /* 0x10 */ TVec3f* mDirection;
+        /* 0x14 */ WalkerStateParam* mStateParam;
+        /* 0x18 */ WalkerStateFindPlayerParam* mFindPlayerParam;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="WalkerStateChase — pursue the player">
+    Steers the enemy toward Mario at `mChaseSpeed` for up to `mChaseTime` frames, then enters a wait period before transitioning back to wander.
+
+    ```cpp
+    class WalkerStateChaseParam {
+    public:
+        /* 0x00 */ f32 mChaseSpeed;
+        /* 0x04 */ s32 mChaseTime;
+        /* 0x08 */ s32 mForceChaseEndTime;
+        /* 0x0C */ f32 mTurnMaxRateDegree;
+        /* 0x10 */ s32 mChaseEndWaitTime;
+    };
+
+    class WalkerStateChase : public ActorStateBase<LiveActor> {
+    public:
+        WalkerStateChase(LiveActor* pHost, TVec3f* pDirection,
+                         WalkerStateParam* pStateParam,
+                         WalkerStateChaseParam* pChaseParam);
+
+        virtual void appear();
+
+        void exeStart();
+        void exeEnd();
+        bool isRunning() const;
+
+        /* 0x10 */ WalkerStateParam* mStateParam;
+        /* 0x14 */ WalkerStateChaseParam* mChaseParam;
+        /* 0x18 */ TVec3f* mDirection;
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="WalkerStateStagger / WalkerStateBlowDamage / WalkerStateBindStarPointer">
+    These three states handle reactive behaviors. `WalkerStateStagger` plays a stagger animation when the enemy is spin-attacked but not killed. `WalkerStateBlowDamage` handles being launched by an explosion. `WalkerStateBindStarPointer` freezes the enemy while a star pointer is locked on.
+
+    All three follow the same `ActorStateBase<LiveActor>` pattern and are created alongside the AI states during `initState()`.
+  </Accordion>
+</AccordionGroup>
+
+### Kuribo (Goomba) — canonical WalkerState user
+
+`Kuribo` is the simplest enemy that uses the full WalkerState composition pattern and serves as the reference implementation.
+
+```cpp
+class Kuribo : public LiveActor {
+public:
+    Kuribo(const char*);
+
+    virtual void init(const JMapInfoIter&);
+    virtual void control();
+    virtual void attackSensor(HitSensor*, HitSensor*);
+    virtual bool receiveMsgPlayerAttack(u32, HitSensor*, HitSensor*);
+
+    bool requestDead();
+    bool requestFlatDown(HitSensor*, HitSensor*);
+    bool requestHipDropDown(HitSensor*, HitSensor*);
+    bool requestStagger(HitSensor*, HitSensor*);
+    bool requestBlowDown(HitSensor*, HitSensor*);
+
+    void exeWander();
+    void exeFindPlayer();
+    void exeChase();
+    void exeStagger();
+    void exeBlow();
+    void exeBlowDown();
+    void exeFlatDown();
+    void exePressDown();
+    void exeHipDropDown();
+    void exeBindStarPointer();
+
+    AnimScaleController* mScaleController;         // 0x8C
+    ItemGenerator* mItemGenerator;                 // 0x90
+    WalkerStateWander* mStateWander;               // 0x94
+    WalkerStateFindPlayer* mStateFindPlayer;       // 0x98
+    WalkerStateBindStarPointer* mBindStarPointer;  // 0x9C
+    WalkerStateStagger* mStateStagger;             // 0xA0
+    WalkerStateChase* mStateChase;                 // 0xA4
+};
+```
+
+## Enemy categories
+
+<AccordionGroup>
+  <Accordion title="Walkers">
+    Ground enemies that use the WalkerState pattern.
+
+    | Class | Common name | Notes |
+    |---|---|---|
+    | `Kuribo` | Goomba | Reference WalkerState user |
+    | `KuriboChief` | Goomba captain | Spawns mini Goombas |
+    | `KuriboMini` | Mini Goomba | Summoned by KuriboChief |
+    | `NokonokoLand` | Koopa Troopa | Shell kick mechanic |
+    | `Karon` | Dry Bones | Reassembles after stomp |
+    | `BegomanBase` / `BegomanSpike` / `BegomanSpring` | Topman variants | Spin-attack sensitive |
+    | `JumpSpider` | Spider enemy | Jumps toward player |
+    | `StinkBugBase` | Stinkbug | Gas cloud attack |
+    | `Metbo` | Mecha-bug | Patrol on rails |
+    | `Dossun` | Thwomp | Smashes downward |
+    | `Jiraira` | Bob-omb ground enemy | Proximity fuse |
+    | `Kanina` | Crab enemy | Sideways walker |
+  </Accordion>
+
+  <Accordion title="Flying enemies">
+    Airborne enemies that move off the ground surface.
+
+    | Class | Common name | Notes |
+    |---|---|---|
+    | `BombBird` | Bomb bird | Drops `BombBirdBomb` projectiles |
+    | `Balloonfish` | Puffer fish (air) | Inflates on approach |
+    | `BasaBasa` | Bat enemy | Swoops at player |
+    | `KoopaJrShip` | Koopa Jr. airship | Moving platform / enemy ship |
+    | `Takobo` | Octopus bomb | Floats and launches |
+    | `BombTeresa` | Bomb Boo | Pursues Mario with bomb |
+    | `Poihana` | Swoopin Stu | Glides along path |
+  </Accordion>
+
+  <Accordion title="Water enemies">
+    Enemies that live in or around water volumes.
+
+    | Class | Common name | Notes |
+    |---|---|---|
+    | `Jellyfish` | Jellyfish | Electric body hazard |
+    | `JellyfishElectric` | Electric jellyfish | Variant with full electric aura |
+    | `Pukupuku` | Cheep Cheep | Swimming fish projectile |
+    | `Gesso` | Blooper | Ink-squirting squid |
+    | `TeresaWater` | Water Boo | Aquatic ghost |
+    | `WaterBazooka` / `WaterBazookaCapsule` | Water launcher | Fixed turret + capsule projectile |
+  </Accordion>
+
+  <Accordion title="Projectiles and homing enemies">
+    Self-propelled hazards launched from other actors or fixed generators.
+
+    | Class | Common name | Notes |
+    |---|---|---|
+    | `HomingKiller` | Bullet Bill / Torpedo | Three types: `HomingKiller`, `Torpedo`, `MagnumKiller` |
+    | `HomingKillerLauncher` | Bill blaster | Spawns `HomingKiller` instances |
+    | `FireBall` | Fireball | Projectile from fire Koopa or Mario |
+    | `FireBubble` | Firebar bubble | Component of `FireBar` |
+    | `ElectricPressureBullet` | Electric bullet | Fired by electric press enemies |
+    | `CocoNutBall` | Coconut projectile | Thrown by coconut trees |
+    | `KameckFireBall` | Kameck fireball | Homing magic from Kameck |
+  </Accordion>
+
+  <Accordion title="Beamers">
+    Stationary enemies that fire energy beams or rings.
+
+    | Class | Common name | Notes |
+    |---|---|---|
+    | `BallBeamer` | Ball beamer | Fires energy balls on timer |
+    | `EyeBeamer` | Eye beamer | Scans and fires when player enters line of sight |
+    | `RingBeamer` | Ring beamer | Emits `RingBeam` ring projectiles |
+    | `SearchBeamer` | Search beamer | Rotating spotlight beam |
+    | `JumpBeamer` | Jump beamer | Beamer that also leaps |
+  </Accordion>
+
+  <Accordion title="Miscellaneous">
+    Enemies that do not fit neatly into the above categories.
+
+    | Class | Common name | Notes |
+    |---|---|---|
+    | `Teresa` | Boo | Turns away when looked at |
+    | `Kameck` | Kameck / Magikoopa | Casts spells; used in boss arenas |
+    | `KameckTurtle` | Magikoopa turtle mount | Carrier for Kameck |
+    | `PackunPetit` | Piranha Plant | Snaps at nearby player |
+    | `HammerHeadPackun` | Hammer-head Piranha Plant | Charges horizontally |
+    | `Snakehead` | Snakehead | Chain of body segments |
+    | `Unizo` | Urchin | Slow roller, spike hazard |
+    | `Mogu` / `Mogucchi` | Monty Mole variants | Pop up from ground |
+    | `IceMerameraKing` | Ice Lava King | Transforms between fire and ice |
+    | `Hanachan` | Caterpillar | Segments that detach on hit |
+    | `OtaRock` | Rock thrower | Hurls boulders |
+    | `Karikari` | Piranha pest | Bites and holds on |
+  </Accordion>
+</AccordionGroup>
+
+### HomingKiller — projectile with Type enum
+
+`HomingKiller` demonstrates how a single class covers multiple enemy subtypes via an in-class `Type` enum.
+
+```cpp
+class HomingKiller : public LiveActor {
+public:
+    enum Type { Type_HomingKiller = 0, Type_Torpedo = 1, Type_MagnumKiller = 2 };
+
+    virtual void init(const JMapInfoIter&);
+    virtual void control();
+    virtual void attackSensor(HitSensor* pSender, HitSensor* pReceiver);
+    virtual bool receiveMsgPlayerAttack(u32, HitSensor*, HitSensor*);
+
+    void appear(const TVec3f&, const TVec3f&);
+    bool processChase();
+    bool tryToExplosion(HitSensor*, HitSensor*);
+    void sendMsgExplosionToNearActor();
+
+    void exeAppear();
+    void exeMoveStart();
+    void exeMove();
+    void exeChaseStart();
+    void exeChase();
+    void exeFreeze();
+    void exeBreak();
+
+    inline f32 getScale() {
+        return mType == Type_MagnumKiller ? 4.0f : 1.0f;
+    }
+
+    /* 0x8C */ Type mType;
+    /* 0x90 */ f32 mChaseStartDist;
+    /* 0x94 */ f32 mChaseEndDist;
+    /* 0x98 */ f32 mChaseRotateSpeed;
+    /* 0xA0 */ TVec3f mFront;
+    /* 0x15D */ bool mIsLinearShot;      // ignore gravity, disable chase
+    /* 0x15E */ bool mUseFullSightAngle; // ignore gravity, full sight angle
+};
+```
+
+### BombBird — flying enemy with owned sub-actors
+
+```cpp
+class BombBird : public LiveActor {
+public:
+    virtual void init(const JMapInfoIter&);
+    virtual void control();
+    virtual void attackSensor(HitSensor*, HitSensor*);
+    virtual bool receiveMsgPlayerAttack(u32, HitSensor*, HitSensor*);
+
+    void exeFlyOnRail();
+    void exeFlyWithAttack();
+    void exeBlow();
+    void exeSwoonStart();
+    void exeSwoon();
+    void exeSwoonEnd();
+
+    MR::FixedArray<BombBirdBomb*, 4> mBombs;       // 0x8C
+    SpinHitController* mSpinHitController;          // 0xB0
+    AnimScaleController* mScaleController;          // 0xB4
+    WalkerStateBindStarPointer* mStarPointer;       // 0xB8
+};
+```
+
+<Tip>
+  The `AnimScaleController` (declared in `Enemy/AnimScaleController.hpp`) is reused across many enemies to shrink the actor when it is squashed by a stomp. The `SpinHitController` (in `Enemy/SpinHitController.hpp`) centralizes spin-attack response logic.
+</Tip>

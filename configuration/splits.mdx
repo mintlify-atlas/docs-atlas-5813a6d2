@@ -1,0 +1,167 @@
+---
+title: "Configuring splits.txt for Petari builds"
+description: "splits.txt defines translation unit boundaries by mapping addresses in the final binary to their original source files and sections."
+---
+
+`splits.txt` is the primary configuration file that tells decomp-toolkit how to partition a compiled binary into its constituent translation units. Each entry maps a source file path to one or more address ranges within the binary's sections, allowing the build system to reconstruct the object files that the original linker combined. The file does not need to reference source files that already exist — splits can be defined speculatively before the corresponding `.cpp` file is written.
+
+## Example
+
+The following is a representative excerpt from Petari's `config/RMGK01/splits.txt`:
+
+```yaml
+nw4r/ut/ut_TagProcessorBase.cpp:
+    .text       start:0x8000734C end:0x80007A1C
+    .data       start:0x80563420 end:0x80563448
+    .sdata2     start:0x806B7C20 end:0x806B7C28
+
+nw4r/ut/ut_CharWriter.cpp:
+    .text       start:0x80008478 end:0x80009D40
+    .bss        start:0x8060A3C0 end:0x8060A3E0
+    .sbss       start:0x806B2E60 end:0x806B2E68
+    .sdata2     start:0x806B7C28 end:0x806B7C48
+```
+
+A file entry that also has a common BSS range looks like this:
+
+```yaml
+foo.cpp:
+    .text       start:0x80047E5C end:0x8004875C
+    .ctors      start:0x803A54C4 end:0x803A54C8
+    .data       start:0x803B1B40 end:0x803B1B60
+    .bss        start:0x803DF828 end:0x803DFA8C
+    .bss        start:0x8040D4AC end:0x8040D4D8 common
+```
+
+## Format
+
+```yaml
+path/to/file.cpp: [file attributes]
+    section     [section attributes]
+    ...
+```
+
+The file path is typically relative to the project's `src/` directory. Each section line names the ELF section followed by any number of section attributes.
+
+## File attributes
+
+File attributes appear on the same line as the source file path, after the colon.
+
+<AccordionGroup>
+  <Accordion title="comment:">
+    Overrides the `mw_comment_version` setting from `config.yml` for this specific file. See [Comment section](/configuration/comment-section) for the full explanation of what this version controls.
+
+    The most common use is `comment:0`, which disables `.comment` section generation entirely for files that were not compiled with `mwcc` (for example, files assembled with `powerpc-eabi-as`). Generating a `.comment` section for an assembled object will cause `mwld` to crash.
+
+    ```yaml
+    TRK_MINNOW_DOLPHIN/ppc/Export/targsupp.s: comment:0
+        .init       start:0x80004640 end:0x80006420
+    ```
+  </Accordion>
+
+  <Accordion title="order:">
+    Provides a hint for the resolved link order of objects. decomp-toolkit generates the link order automatically in most cases, so this attribute is not required. Use it to anchor a file's position when the automatic resolution is ambiguous.
+
+    ```yaml
+    file1.cpp: order:0
+        .text       start:0x80001000 end:0x80002000
+
+    file2.cpp: order:1
+        .text       start:0x80002000 end:0x80003000
+
+    file3.cpp: order:2
+        .text       start:0x80003000 end:0x80004000
+    ```
+
+    This guarantees that `file2.cpp` is always resolved between `file1.cpp` and `file3.cpp` in the final link order.
+  </Accordion>
+</AccordionGroup>
+
+## Section attributes
+
+Section attributes appear after the section name on each indented line.
+
+<AccordionGroup>
+  <Accordion title="start: and end:">
+    Define the address range occupied by this section within the file.
+
+    - For DOL (main executable) splits, addresses are absolute: `start:0x80001234`
+    - For REL (relocatable module) splits, addresses are section-relative: `start:0x1234`
+
+    Both `start:` and `end:` are required for every section entry.
+
+    ```yaml
+    SomeActor.cpp:
+        .text       start:0x800DD2EC end:0x800DD348
+        .bss        start:0x8060A400 end:0x8060A420
+    ```
+  </Accordion>
+
+  <Accordion title="align:">
+    Specifies the alignment of the section in bytes. When omitted, decomp-toolkit uses the default alignment for the section type as declared in the `Sections:` block at the top of `splits.txt`.
+
+    ```yaml
+    SomeFile.cpp:
+        .data       start:0x80563420 end:0x80563448 align:32
+    ```
+  </Accordion>
+
+  <Accordion title="rename:">
+    Writes the section under a different name in the generated split object. This is used for named subsections such as `.ctors$10`, which the linker uses to control initialization ordering.
+
+    ```yaml
+    SomeFile.cpp:
+        .ctors      start:0x803A54C4 end:0x803A54C8 rename:.ctors$10
+    ```
+  </Accordion>
+
+  <Accordion title="common">
+    Marks a `.bss` range as belonging to the common BSS area. This attribute is only valid on `.bss` sections. Correctly tagging common BSS ranges is important for determining the final link order and for reproducing the common BSS inflation bug in older linkers.
+
+    See [Common BSS](/configuration/common-bss) for a full explanation.
+
+    ```yaml
+    foo.cpp:
+        .bss        start:0x803DF828 end:0x803DFA8C
+        .bss        start:0x8040D4AC end:0x8040D4D8 common
+    ```
+  </Accordion>
+
+  <Accordion title="skip">
+    Skips this address range when writing the object file. Use this for data that the linker generates itself (for example, linker-synthesized padding or metadata) so that decomp-toolkit does not try to reconstruct it from source.
+
+    ```yaml
+    SomeFile.cpp:
+        .init       start:0x80004000 end:0x80004040 skip
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## The `__init_cpp_exceptions.cpp` split
+
+The C++ exception-handling runtime requires a special split for the `__init_cpp_exceptions` object. Its exact form depends on which linker version was used to build the binary.
+
+**GC 1.0 – GC 2.6 linkers**
+
+```yaml
+__init_cpp_exceptions.cpp:
+    .text       start:0x800070A0 end:0x800070C4
+    extab       start:0x800064E0 end:0x800064F0
+    extabindex  start:0x800065C0 end:0x800065D0
+```
+
+**GC 2.7+ linkers**
+
+The newer linker generates a different layout for the exception tables:
+
+```yaml
+__init_cpp_exceptions.cpp:
+    .text       start:0x800070A0 end:0x800070C4
+    extab       start:0x800064E0 end:0x800064F0
+    extabindex  start:0x800065C0 end:0x800065D0
+    .ctors      start:0x803A54C4 end:0x803A54C8 rename:.ctors$10
+```
+
+<Note>
+  The `rename:.ctors$10` entry is required for GC 2.7+ builds because the newer linker uses a named subsection to order the C++ exception initializer relative to other constructors.
+</Note>

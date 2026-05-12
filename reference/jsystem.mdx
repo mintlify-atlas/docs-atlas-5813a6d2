@@ -1,0 +1,93 @@
+---
+title: "JSystem: Nintendo's core game framework"
+description: "JSystem is Nintendo's internal framework used across GameCube and Wii titles, providing 3D rendering, audio, archive management, particles, and utilities."
+---
+
+JSystem is Nintendo's internal C++ framework library, reused across a wide range of GameCube and Wii games. In Petari it provides the foundational infrastructure on top of which the Super Mario Galaxy 1 game layer is built: 3D model loading and rendering, an audio sequencer, heap and archive management, a particle system, math utilities, and a set of debug/utility modules. The JSystem code in this repository is sourced from the [doldecomp/tp](https://github.com/zeldaret/tp) (Twilight Princess) and [doldecomp/ogws](https://github.com/doldecomp/ogws) (One Piece: Unlimited Adventure) decompilation projects.
+
+<Note>
+  JSystem headers and source files were contributed by the [zeldaret/tp](https://github.com/zeldaret/tp) and [doldecomp/ogws](https://github.com/doldecomp/ogws) projects. Credit goes to those teams for their prior decompilation work.
+</Note>
+
+## Subsystems
+
+JSystem is organized into eleven top-level directories under `src/JSystem/`. Each directory corresponds to a self-contained subsystem with its own namespace and header tree.
+
+<AccordionGroup>
+  <Accordion title="J3DGraphBase — core 3D rendering primitives">
+    Defines the low-level GX-backed rendering primitives used by the J3D pipeline: materials, TEV stages, texture coordinate generation, vertex descriptors, draw buffers, and the global `J3DSys` state object.
+
+    Key source files: `J3DMaterial.cpp`, `J3DTevs.cpp`, `J3DShape.cpp`, `J3DVertex.cpp`, `J3DSys.cpp`
+
+    ```cpp
+    // Material factory — selects the appropriate color/texgen/tev block subclass
+    J3DColorBlock*  J3DMaterial::createColorBlock(u32 flags);
+    J3DTexGenBlock* J3DMaterial::createTexGenBlock(u32 flags);
+    J3DTevBlock*    J3DMaterial::createTevBlock(int tevStageNum);
+    ```
+  </Accordion>
+
+  <Accordion title="J3DGraphAnimator — model, joint, and animation data">
+    Owns the high-level model objects (`J3DModel`, `J3DModelData`) and the skeletal animation system (`J3DJoint`, `J3DJointTree`, `J3DAnimation`). Also handles skin deformation (`J3DSkinDeform`) and the per-frame matrix buffer (`J3DMtxBuffer`).
+
+    Key source files: `J3DModel.cpp`, `J3DModelData.cpp`, `J3DAnimation.cpp`, `J3DJoint.cpp`, `J3DSkinDeform.cpp`
+  </Accordion>
+
+  <Accordion title="J3DGraphLoader — BMD/BCA file parsing">
+    Reads Nintendo's binary model format (`.bmd`/`.bdl`) and animation formats (`.bca`, `.bck`, etc.) from memory and populates the J3D data structures. Factory classes handle versioned material formats.
+
+    Key source files: `J3DModelLoader.cpp`, `J3DAnmLoader.cpp`, `J3DMaterialFactory.cpp`, `J3DShapeFactory.cpp`
+  </Accordion>
+
+  <Accordion title="J2DGraph — 2D orthographic rendering">
+    Implements a 2D scene graph for HUD and overlay rendering using an orthographic projection. Panes, pictures, and screens mirror the Wii's `nw4r::lyt` concepts but at a lower level.
+
+    Key source files: `J2DScreen.cpp`, `J2DPane.cpp`, `J2DPicture.cpp`, `J2DOrthoGraph.cpp`
+  </Accordion>
+
+  <Accordion title="JAudio2 — audio sequencer">
+    Provides the sequence-playback layer of the JSystem audio pipeline. `JASSeqCtrl` drives a `JASSeqParser` to step through MIDI-like sequence data tick-by-tick, dispatching events to `JASTrack` objects for sound synthesis.
+
+    Key source files: `JASSeqCtrl.cpp`, `JASSeqParser.cpp`, `JASSeqReader.cpp`, `JASTrack.cpp`
+  </Accordion>
+
+  <Accordion title="JKernel — heap and archive management">
+    The resource-management backbone of JSystem. `JKRHeap` and `JKRExpHeap` implement zone-based memory allocation. Archive classes (`JKRArchive`, `JKRDvdArchive`, `JKRAramArchive`, `JKRMemArchive`, `JKRCompArchive`) wrap different storage backends behind a unified file-lookup API. `JKRThread` wraps OS threads.
+
+    Key source files: `JKRHeap.cpp`, `JKRExpHeap.cpp`, `JKRDvdArchive.cpp`, `JKRDecomp.cpp`, `JKRThread.cpp`
+  </Accordion>
+
+  <Accordion title="JParticle (JPa) — particle system">
+    A data-driven particle system that reads `.jpa` resource files. `JPAEmitterManager` owns a pool of `JPAEmitter` instances; each emitter generates `JPAParticle` objects shaped by `JPABaseShape`, `JPAExtraShape`, `JPADynamicsBlock`, and `JPAFieldBlock` descriptors.
+
+    Key source files: `JPAEmitterManager.cpp`, `JPAEmitter.cpp`, `JPAParticle.cpp`, `JPAResourceLoader.cpp`, `JPAResourceManager.cpp`
+  </Accordion>
+
+  <Accordion title="JMath — math utilities">
+    Scalar and trigonometric helpers used throughout JSystem. Includes a random-number generator and fixed-point trigonometry tables.
+
+    Key source files: `JMath.cpp`, `JMATrigonometric.cpp`, `random.cpp`
+  </Accordion>
+
+  <Accordion title="JGadget — generic data structures">
+    Lightweight intrusive linked-list and hash-code utilities used as building blocks by other JSystem modules.
+
+    Key source files: `linklist.cpp`, `hashcode.cpp`
+  </Accordion>
+
+  <Accordion title="JSupport — stream and list utilities">
+    Stream abstractions (`JSUInputStream`, `JSUMemoryStream`) and an intrusive doubly-linked list (`JSUList`) used for serialization and object management.
+
+    Key source files: `JSUInputStream.cpp`, `JSUMemoryStream.cpp`, `JSUList.cpp`
+  </Accordion>
+
+  <Accordion title="JUtility — debug and rendering utilities">
+    Assertion and exception handlers, a debug console, font rendering, palette and texture helpers, and framebuffer (`JUTXfb`) management. Primarily used during development and in debug builds.
+
+    Key source files: `JUTAssert.cpp`, `JUTConsole.cpp`, `JUTFont.cpp`, `JUTTexture.cpp`, `JUTException.cpp`
+  </Accordion>
+</AccordionGroup>
+
+## Decompilation status
+
+JSystem modules vary in completion. Some files — particularly in `JKernel` and `J3DGraphBase` — are fully matched to the original binary. Others, especially parts of `JAudio2` and `JParticle`, contain non-matching stubs that are still under active work. Check [decomp.dev/SMGCommunity/Petari](https://decomp.dev/SMGCommunity/Petari) for up-to-date per-file progress.

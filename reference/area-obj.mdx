@@ -1,0 +1,272 @@
+---
+title: "AreaObj: trigger zones and area effects"
+description: "AreaObj trigger zones that apply audio effects, switch background music, control the camera, and govern gameplay rules within defined level regions."
+---
+
+`AreaObj` objects are invisible, volume-based triggers placed in levels that activate game systems when Mario enters or stays within them. Unlike `LiveActor`-based objects, they do not render or participate in the physics simulation directly — they simply test whether a 3D point is inside a geometric volume, then act on the result. The `AreaObj/` directory contains 36 headers covering audio, camera, environment, and gameplay areas.
+
+## AreaObj — base class
+
+```cpp
+class AreaObj : public NameObj {
+public:
+    AreaObj(int, const char*);
+
+    virtual void init(const JMapInfoIter&);
+    virtual bool isInVolume(const TVec3f&) const;
+    virtual const char* getManagerName() const;
+
+    // Switch A/B interface
+    void onSwitchA();
+    void offSwitchA();
+    bool isOnSwitchA() const;
+    bool isOnSwitchB() const;
+    bool isValidSwitchA() const;
+    bool isValidSwitchB() const;
+
+    // Follow a moving matrix (e.g. a moving platform)
+    void setFollowMtx(const TPos3f*);
+    TPos3f* getFollowMtx() const;
+
+    void validate();
+    void invalidate();
+    void awake();
+    void sleep();
+    bool isValid() const;
+
+    AreaForm* mForm;              // 0xC  — geometric volume
+    int mType;                    // 0x10
+    bool mIsValid;                // 0x14
+    bool mIsAwake;                // 0x16
+    s32 mObjArg0;                 // 0x18
+    s32 mObjArg1;                 // 0x1C
+    s32 mObjArg2;                 // 0x20
+    s32 mObjArg3;                 // 0x24
+    s32 mObjArg4;                 // 0x28
+    s32 mObjArg5;                 // 0x2C
+    s32 mObjArg6;                 // 0x30
+    s32 mObjArg7;                 // 0x34
+    StageSwitchCtrl* mSwitchCtrl; // 0x38
+};
+```
+
+`AreaObjMgr` maintains a flat array of all areas of a given type and provides `find_in(TVec3f)` to locate the innermost area containing a point.
+
+## AreaForm — geometric volume shapes
+
+The shape of an area is stored in an `AreaForm` subclass attached to `mForm`. The correct subclass is chosen at init time based on the object's type parameter.
+
+```cpp
+class AreaForm {
+public:
+    virtual void init(const JMapInfoIter&);
+    virtual bool isInVolume(const TVec3f&) const;
+    TPos3f* _4;  // optional follow matrix
+};
+
+// Oriented box — most common shape
+class AreaFormCube : public AreaForm {
+public:
+    virtual void init(const JMapInfoIter&);
+    virtual bool isInVolume(const TVec3f&) const;
+
+    TVec3f mTranslation;  // 0xC
+    TVec3f mRotation;     // 0x18
+    TVec3f mScale;        // 0x24
+    TBox3f mBounding;     // 0x30
+    Mtx _48;
+};
+
+// Sphere
+class AreaFormSphere : public AreaForm {
+public:
+    virtual bool isInVolume(const TVec3f&) const;
+    TVec3f mTranslation;  // 0x8
+    TVec3f mUp;           // 0x18
+};
+
+// Hemisphere / bowl
+class AreaFormBowl : public AreaForm {
+public:
+    virtual bool isInVolume(const TVec3f&) const;
+    TVec3f mTranslation;  // 0x8
+    TVec3f mUp;           // 0x14
+};
+
+// Cylinder
+class AreaFormCylinder : public AreaForm {
+public:
+    virtual bool isInVolume(const TVec3f&) const;
+    TVec3f mTranslation;  // 0x8
+    TVec3f mRotation;     // 0x14
+};
+```
+
+## Area categories
+
+<AccordionGroup>
+  <Accordion title="Audio areas">
+    Areas that modify which sound effects or music is played while Mario is inside.
+
+    ```cpp
+    class AudioEffectArea : public AreaObj {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual void movement();
+        virtual const char* getManagerName() const;
+
+        s32 _3C;  // effect type
+        s32 _40;  // effect parameter
+    };
+    ```
+
+    | Class | Purpose |
+    |---|---|
+    | `AudioEffectArea` | Applies a reverb or echo audio effect (e.g. cave echo, underwater filter) |
+    | `BgmProhibitArea` | Suppresses background music while Mario is inside |
+    | `ChangeBgmCube` | Switches the background music track when entered |
+    | `PlayerSeArea` | Overrides the player sound effect set (e.g. switches to underwater footstep sounds) |
+    | `SoundEmitterCube` | Plays a looping environmental sound from a box-shaped source |
+    | `SoundEmitterSphere` | Plays a looping environmental sound from a sphere-shaped source |
+  </Accordion>
+
+  <Accordion title="Camera areas">
+    Areas that override, restrict, or reposition the camera system.
+
+    ```cpp
+    class CubeCameraArea : public AreaObj {
+    public:
+        enum ECategory {
+            CATEGORY_UNKNOWN_0 = 0,
+            CATEGORY_UNKNOWN_1 = 1,
+            CATEGORY_UNKNOWN_2 = 2,
+            CATEGORY_UNKNOWN_3 = 3,
+            CATEGORY_UNKNOWN_4 = 4,
+        };
+
+        virtual void init(const JMapInfoIter&);
+        virtual void movement();
+        virtual bool isInVolume(const TVec3f&) const;
+        virtual s32 getCategoryArg() const;
+
+        bool isValidCameraID() const;
+        u16 getCameraID() const;
+
+        static void setCurrentCategory(s32);
+        static s32 sCubeCategory;
+
+        s32 _3C;
+        u32 mZoneID;  // 0x40
+    };
+    ```
+
+    | Class | Purpose |
+    |---|---|
+    | `CubeCameraArea` | Activates a named camera preset when Mario is inside the box |
+    | `CameraRepulsiveArea` | Pushes the camera away from the defined volume |
+    | `BigBubbleCameraArea` | Locks the camera for the giant bubble transport sequence |
+    | `MercatorTransformCube` | Triggers Mercator coordinate transform for 2D-style sections |
+  </Accordion>
+
+  <Accordion title="Environment and visual areas">
+    Areas that alter rendering, lighting, or post-processing while active.
+
+    | Class | Purpose |
+    |---|---|
+    | `DeathArea` | Kills Mario instantly when entered; `getDeathType()` returns the death animation variant |
+    | `WaterArea` | Applies water physics to Mario; `WaterAreaMgr` manages multiple water volumes |
+    | `LightArea` | Overrides the scene lighting preset within the volume |
+    | `BloomArea` | Adjusts bloom intensity and parameters |
+    | `SimpleBloomArea` | Simplified single-parameter bloom override |
+    | `DepthOfFieldArea` | Activates or adjusts depth-of-field blur |
+    | `HazeCube` | Adds heat-haze / distortion effect |
+    | `GlaringLightArea` | Adds a lens-flare glare overlay |
+    | `ScreenBlurArea` | Applies a motion blur or Gaussian blur to the screen |
+    | `ImageEffectArea` | Generic image effect base (parent of `BloomArea`) |
+    | `SunLightArea` | Overrides sun direction and color |
+    | `QuakeEffectArea` | Activates screen-shake effect |
+    | `FollowCollisionArea` | Collision area that follows a moving actor |
+    | `CollisionArea` | Static collision trigger volume |
+
+    ```cpp
+    class DeathArea : public AreaObj {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual void movement();
+        virtual bool isInVolume(const TVec3f&) const;
+        virtual const char* getManagerName() const;
+
+        s32 getDeathType() const;
+    };
+
+    class WaterArea : public AreaObj {
+    public:
+        virtual void init(const JMapInfoIter&);
+        s32 _3C;  // water type / behavior flags
+    };
+
+    class LightArea : public AreaObj {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual const char* getManagerName() const;
+        s32 mPlacedZoneID;  // 0x3C
+    };
+    ```
+  </Accordion>
+
+  <Accordion title="Gameplay areas">
+    Areas that control switches, warps, spin guidance, or stage transitions.
+
+    ```cpp
+    class SwitchArea : public AreaObj {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual void movement();
+        virtual const char* getManagerName() const;
+
+        bool isUpdate() const;
+    };
+
+    class WarpCube : public AreaObj {
+    public:
+        virtual void init(const JMapInfoIter&);
+        virtual void movement();
+        virtual void draw() const;
+
+        JMapIdInfo* mMapIdInfo;        // 0x3C — destination map info
+        ActorCameraInfo* mCameraInfo;  // 0x40 — warp camera sequence
+        char* mEventName;              // 0x44
+    };
+
+    class SpinGuidanceArea : public AreaObj {
+    public:
+        virtual void init(const JMapInfoIter&);
+    };
+    ```
+
+    | Class | Purpose |
+    |---|---|
+    | `SwitchArea` | Fires switch A or B while Mario is inside; deactivates when Mario leaves |
+    | `WarpCube` | Warps Mario to a different zone or galaxy section |
+    | `AstroChangeStageCube` | Triggers a stage transition when entered (used in observatory) |
+    | `SpinGuidanceArea` | Displays the spin-attack tutorial prompt when Mario first enters |
+    | `RestartCube` | Sets the respawn checkpoint used on game-over |
+    | `MessageArea` | Triggers a hint message display |
+    | `BigBubbleGoalArea` | Defines the destination for the giant bubble transport |
+  </Accordion>
+</AccordionGroup>
+
+## AreaObjFollower
+
+`AreaObjFollower` is a helper class that attaches an area's volume to a moving object by calling `setFollowMtx` each frame, keeping the trigger volume co-located with a moving actor such as a ship or platform.
+
+```cpp
+class AreaObjFollower : public NameObj {
+    // Drives AreaObj::setFollowMtx every update tick
+    // to make the trigger volume follow a LiveActor's matrix.
+};
+```
+
+<Tip>
+  When reading level object placement data, an area's `mObjArg0`–`mObjArg7` fields carry designer-specified integer parameters that each subclass interprets independently. For example, `DeathArea` uses `mObjArg0` as the death type index, while `ChangeBgmCube` uses it as the BGM track ID. Check the specific subclass `init` implementation to find which args are consumed.
+</Tip>

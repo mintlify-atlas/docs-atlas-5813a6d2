@@ -1,0 +1,86 @@
+---
+title: "Set up CI builds and progress tracking"
+description: "Configure the included GitHub Actions workflow to automate builds and report decompilation progress for your Petari-based project."
+---
+
+Petari ships with `.github.example/workflows/build.yml`, a ready-made CI workflow that builds every version on each push or pull request and reports decompilation progress to [frogress](https://decomp.dev) on pushes to `main`. Complete the three sections below to activate it.
+
+## Build repository
+
+A separate, **private** GitHub repository stores the Docker build container that CI uses to compile the project. It is kept private so game assets are never publicly accessible.
+
+<Warning>
+  This repository must remain **private**. Exposing it publicly would make the
+  game's original assets visible to anyone.
+</Warning>
+
+<Steps>
+  <Step title="Create the build repository">
+    [Create a new **private** repository from the `encounter/dtk-template-build`
+    template.](https://github.com/new?template_name=dtk-template-build&template_owner=encounter)
+    A common convention is to append `-build` to your project name — for
+    example, `smg-build`.
+  </Step>
+  <Step title="Add game assets">
+    Copy your game's original files into the `orig/GAMEID` directory, replacing
+    `GAMEID` with your game's actual ID to match the `orig/` layout in your
+    main repository. Include only the files required for the build, such as
+    `sys/main.dol` and any `.rel` or `.sel` files.
+  </Step>
+  <Step title="Wait for the build container action">
+    After pushing, GitHub Actions will build and publish the container image as
+    a package on the repository. Once the action finishes, open the repository's
+    **Packages** page, then open **Package settings**.
+  </Step>
+  <Step title="Grant the main repository read access">
+    Under **Manage Actions access**, add your main project repository and set
+    its role to **Read**. This allows CI in the main repository to pull the
+    private build image.
+  </Step>
+</Steps>
+
+## Progress tracking
+
+Decompilation progress is pushed to [frogress](https://decomp.dev) so the community can track how complete the project is. You need an API key to authenticate those uploads.
+
+<Steps>
+  <Step title="Request an API key">
+    Join the [GC/Wii Decompilation Discord](https://discord.gg/hKx3FJJgrV) and
+    post in `#frogress` to request a key for your project. Include your project
+    name, repository URL, game ID(s), and whether the game uses REL files.
+  </Step>
+  <Step title="Add the secret to GitHub">
+    In your main repository, navigate to **Settings → Secrets and variables →
+    Actions → New repository secret**. Name the secret `PROGRESS_API_KEY` and
+    paste the key you received.
+  </Step>
+</Steps>
+
+## Workflow setup
+
+With the build repository and API key in place, enable the workflow by renaming and editing the example configuration.
+
+<Steps>
+  <Step title="Rename the example directory">
+    Rename `.github.example` to `.github` at the root of your repository. This
+    makes GitHub recognise the included workflow file.
+  </Step>
+  <Step title="Point the workflow at your build image">
+    Open `.github/workflows/build.yml` and update the `container:` field to the
+    package URL of the image published by your build repository.
+  </Step>
+  <Step title="Set the game ID">
+    Replace the placeholder `GAMEID` value in `build.yml` with your game's
+    actual ID. If your project supports multiple versions, provide a list of
+    IDs.
+  </Step>
+  <Step title="Update the progress slug">
+    Set `PROGRESS_SLUG` in `build.yml` to the project slug you registered on
+    frogress. This slug identifies which project receives the progress reports.
+  </Step>
+  <Step title="Commit and push">
+    Commit all changes and push to `main`. If everything is configured
+    correctly, the workflow will build all versions and, on pushes to `main`,
+    upload the latest progress figures to frogress.
+  </Step>
+</Steps>

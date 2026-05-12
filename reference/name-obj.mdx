@@ -1,0 +1,128 @@
+---
+title: "NameObj: Petari's root object base class"
+description: "NameObj is the root base class for every named game object in Super Mario Galaxy, providing a name string, movement flags, and scene executor integration."
+---
+
+`NameObj` sits at the top of Petari's object hierarchy. Every entity that participates in the scene's update loop — from the simplest trigger volume to a fully animated boss — ultimately inherits from `NameObj`. The class provides a name string used by the object factory system, movement control flags, and an index that slots the object into the scene executor's ordered lists.
+
+## Class definition
+
+```cpp
+// include/Game/NameObj/NameObj.hpp
+
+class NameObj {
+public:
+    NameObj(const char* pName);
+    virtual ~NameObj();
+
+    // Called when the object is placed into the scene via a JMapInfo iterator
+    virtual void init(const JMapInfoIter& rIter);
+
+    // Called after all objects in the scene have been placed
+    virtual void initAfterPlacement();
+
+    virtual void movement();
+    virtual void draw() const;
+    virtual void calcAnim();
+    virtual void calcViewAndEntry();
+
+    // Initialise without a JMapInfo iterator (for programmatically-created objects)
+    void initWithoutIter();
+
+    // Change the object's name at runtime
+    void setName(const char* pName);
+
+    void executeMovement();
+    void requestSuspend();
+    void requestResume();
+    void syncWithFlags();
+
+    /* 0x4 */ const char* mName;      // Identifies the object type (used by the factory)
+    /* 0x8 */ volatile u16 mFlag;     // Movement control flags
+    /* 0xA */ s16 mExecutorIdx;       // Index into the NameObjExecuteHolder array
+};
+```
+
+<Note>
+  The vtable pointer occupies offset `0x0`, so `mName` starts at `0x4`. All
+  offsets in Petari headers are relative to the start of the object in memory,
+  not to the start of the vtable.
+</Note>
+
+## The name string
+
+`mName` is a pointer to a null-terminated C string that identifies the object's *type*, not a display name. The factory system uses this string to instantiate the correct C++ class when the game loads a stage layout (`JMapInfo`). For example, an object with `mName = "Koopa"` is created by looking up `"Koopa"` in `NameObjFactory`.
+
+You can change the name at runtime with `setName`, but this is rarely necessary outside of factory code.
+
+```cpp
+// Programmatic creation — name passed directly to the constructor
+MyActor::MyActor() : LiveActor("MyActor") {}
+
+// Factory-registered name must match what appears in the stage's JMapInfo data
+```
+
+## Movement flags
+
+`mFlag` is a bitmask of two movement-related bits managed by the scene executor. `requestSuspend()` and `requestResume()` queue flag changes that are applied by `syncWithFlags()` at the start of the next frame.
+
+`NameObjFunction` provides static helpers that operate on any `NameObj`:
+
+```cpp
+// include/Game/NameObj/NameObj.hpp
+class NameObjFunction {
+public:
+    static void requestMovementOn(NameObj*);
+    static void requestMovementOff(NameObj*);
+};
+```
+
+## Executor index
+
+`mExecutorIdx` is set by `NameObjExecuteHolder` when the object is registered. The executor iterates its internal array in order each frame, calling `movement()`, `calcAnim()`, `calcViewAndEntry()`, and `draw()` on each registered object. The index allows O(1) removal without shuffling the array.
+
+## Object groups
+
+`NameObjGroup` is a `NameObj` subclass that holds an array of `NameObj` pointers, enabling batch operations across a set of objects.
+
+```cpp
+// include/Game/NameObj/NameObjGroup.hpp
+class NameObjGroup : public NameObj {
+public:
+    NameObjGroup(const char*, int);
+
+    void registerObj(NameObj*);
+    void pauseOffAll() const;
+    void initObjArray(int);
+
+    s32 getObjectCount() const { return mObjectCount; }
+
+    /* 0x10 */ s32       mObjectCount;
+    /* 0x14 */ NameObj** mObjects;
+};
+```
+
+The most important group at runtime is `AllLiveActorGroup` (`SceneObj_AllLiveActorGroup`). Every `LiveActor` registers itself in its constructor, giving subsystems a single place to iterate all live actors for operations such as gravity application, debug rendering, or bulk invalidation.
+
+```cpp
+// From LiveActor constructor (src/Game/LiveActor/LiveActor.cpp)
+MR::getAllLiveActorGroup()->registerActor(this);
+```
+
+Groups are stored in the scene's `SceneObjHolder` and retrieved by their `SceneObj` enum ID, for example:
+
+```cpp
+NameObj* group = MR::getSceneObj<NameObjGroup>(SceneObj_AllLiveActorGroup);
+```
+
+## Inheritance chain
+
+```
+NameObj
+└── LiveActor          (adds transform, Nerve/Spine, subsystem pointers)
+    └── MapObjActor    (map-placed objects with standard init helpers)
+    └── Enemy          (enemy base with health and attack logic)
+    └── ...
+```
+
+Every concrete game class that participates in the scene update loop ultimately inherits `NameObj`'s name, flags, and executor slot.

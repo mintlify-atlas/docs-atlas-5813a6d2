@@ -1,0 +1,89 @@
+---
+title: "Contributing to Petari: the full workflow"
+description: "End-to-end guide for finding an unmatched function, writing matching C++, verifying with objdiff, and submitting a pull request to Petari."
+---
+
+Contributing to Petari means reading PowerPC assembly from the game binary and writing C++ source code that, when compiled with CodeWarrior 3.0a3, produces a byte-for-byte identical result. This page walks through the complete process from picking a function to opening a pull request.
+
+<Warning>
+  Do not use AI software to decompile game code. The project requires all code to be written by real people. AI tools have been known to incorporate information from SDK leaks, which creates legal concerns and undermines the goal of a clean, verifiable decompilation.
+</Warning>
+
+## Required tools
+
+Before you start, make sure you have the following installed:
+
+| Tool | Notes |
+|------|-------|
+| **IDA Pro** or **Ghidra** | For disassembling and inspecting PowerPC assembly. A plain disassembler also works. |
+| **CodeWarrior 3.0a3** | The exact compiler version the game was built with. |
+| **Python 3.7+** | Required for `configure.py` and the build toolchain. |
+| **VS Code** (recommended) | The build system generates `compile_commands.json` automatically, enabling `clangd` for code completion and diagnostics. |
+
+You also need knowledge of C/C++ and PowerPC assembly. Familiarity with PowerPC-to-C++ reverse engineering techniques is essential.
+
+## Workflow
+
+<Steps>
+  <Step title="Find an unmatched function in objdiff">
+    Open objdiff and set your project directory. Select an object file from the left sidebar. Functions that have not yet been matched are highlighted. Pick one to work on.
+
+    ```bash
+    # objdiff rebuilds automatically when source files change —
+    # no manual refresh needed during development
+    ```
+  </Step>
+
+  <Step title="Disassemble and study the assembly">
+    Load the game binary in IDA Pro or Ghidra and navigate to the function's address. Read through the PowerPC assembly to understand what the function does: its control flow, the data it reads and writes, and how it calls other functions.
+
+    Decompilers such as Hex-Rays (included with IDA Pro) can produce a rough C approximation that gives you a starting point, but the output will need significant cleanup to match the original code.
+  </Step>
+
+  <Step title="Write C++ that matches the assembly">
+    Implement the function in the appropriate `.cpp` source file. Follow the [code style guidelines](/contributing/guidelines) for naming conventions, null pointer usage, and documentation.
+
+    Pay close attention to:
+    - Argument types — using `int` vs `s32` affects symbol mangling (see [nonmatching docs](/contributing/nonmatching))
+    - Whether the function accesses members via a pointer or reference
+    - The exact order of operations, which the compiler preserves
+  </Step>
+
+  <Step title="Run ninja and check the output">
+    Build the project with `ninja`. The output must be **1:1** with the original binary for the file to be marked as MATCHING. If the build output differs, the linking sequence will fail and the file will not be marked.
+
+    ```bash
+    ninja
+    ```
+
+    <Note>
+      It is **required** that the `ninja` output is 1:1 for a file to be marked MATCHING. A near-match is not sufficient — the compiled bytes must be identical.
+    </Note>
+  </Step>
+
+  <Step title="Verify all functions with objdiff">
+    After a successful build, open objdiff and select the object file you modified. Check each function to confirm it shows as matching. objdiff compares the compiled output against the original binary and highlights any differences at the instruction level.
+  </Step>
+
+  <Step title="Confirm the file is marked as decompiled">
+    When every function in a file matches, the file is automatically marked as decompiled by the build system. You do not need to take any manual action — this happens as part of the build pipeline.
+  </Step>
+
+  <Step title="Run ninja again to see updated percentages">
+    Run `ninja` one more time to regenerate the progress report. The decompilation percentage for the project will update to reflect your matched functions.
+
+    ```bash
+    ninja
+    ```
+  </Step>
+
+  <Step title="Submit a pull request">
+    Open a pull request against the main branch of the Petari repository. Make sure all submitted code follows the [guidelines](/contributing/guidelines). Include a clear description of what you matched and any relevant notes about the implementation.
+
+    If your code does not yet fully match, see [documenting nonmatching code](/contributing/nonmatching) before submitting.
+  </Step>
+</Steps>
+
+## Questions
+
+If you have questions at any point in this process, join the Petari [Discord server](https://discord.gg/ZxEqyYeZbf). The community can help with disassembly, matching strategies, and toolchain issues.
